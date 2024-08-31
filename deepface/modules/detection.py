@@ -19,7 +19,7 @@ logger = Logger()
 
 
 def extract_faces(
-    img_path: Union[str, np.ndarray],
+    img_path: List[Union[str, np.ndarray]],
     detector_backend: str = "opencv",
     enforce_detection: bool = True,
     align: bool = True,
@@ -29,35 +29,34 @@ def extract_faces(
     normalize_face: bool = True,
     anti_spoofing: bool = False,
     max_faces: Optional[int] = None,
-) -> List[Dict[str, Any]]:
+) -> List[Dict[str, List[Dict[str, Any]]]]:
     """
     Extract faces from a given image
 
     Args:
-        img_path (str or np.ndarray): Path to the first image. Accepts exact image path
-            as a string, numpy array (BGR), or base64 encoded images.
+        img_path (List[Union[str, np.ndarray]]): List of paths to images or numpy arrays.
 
-        detector_backend (string): face detector backend. Options: 'opencv', 'retinaface',
+        detector_backend (str): face detector backend. Options: 'opencv', 'retinaface',
             'mtcnn', 'ssd', 'dlib', 'mediapipe', 'yolov8', 'centerface' or 'skip'
             (default is opencv)
 
-        enforce_detection (boolean): If no face is detected in an image, raise an exception.
+        enforce_detection (bool): If no face is detected in an image, raise an exception.
             Default is True. Set to False to avoid the exception for low-resolution images.
 
         align (bool): Flag to enable face alignment (default is True).
 
         expand_percentage (int): expand detected facial area with a percentage.
 
-        grayscale (boolean): (Deprecated) Flag to convert the output face image to grayscale
+        grayscale (bool): (Deprecated) Flag to convert the output face image to grayscale
             (default is False).
 
-        color_face (string): Color to return face image output. Options: 'rgb', 'bgr' or 'gray'
+        color_face (str): Color to return face image output. Options: 'rgb', 'bgr' or 'gray'
             (default is 'rgb').
 
-        normalize_face (boolean): Flag to enable normalization (divide by 255) of the output
+        normalize_face (bool): Flag to enable normalization (divide by 255) of the output
             face image output face image normalization (default is True).
 
-        anti_spoofing (boolean): Flag to enable anti spoofing (default is False).
+        anti_spoofing (bool): Flag to enable anti spoofing (default is False).
 
     Returns:
         results (List[Dict[str, Any]]): A list of dictionaries, where each dictionary contains:
@@ -72,123 +71,124 @@ def extract_faces(
 
         - "confidence" (float): The confidence score associated with the detected face.
 
-        - "is_real" (boolean): antispoofing analyze result. this key is just available in the
+        - "is_real" (bool): antispoofing analyze result. this key is just available in the
             result only if anti_spoofing is set to True in input arguments.
 
         - "antispoof_score" (float): score of antispoofing analyze result. this key is
             just available in the result only if anti_spoofing is set to True in input arguments.
     """
 
-    resp_objs = []
-
     # img might be path, base64 or numpy array. Convert it to numpy whatever it is.
-    img, img_name = image_utils.load_image(img_path)
+    if not isinstance(img_path, list):
+        img_path = [img_path]
 
-    if img is None:
-        raise ValueError(f"Exception while loading {img_name}")
-
-    height, width, _ = img.shape
-
-    base_region = FacialAreaRegion(x=0, y=0, w=width, h=height, confidence=0)
+    img_batch = image_utils.load_image_batch(img_path)
+    base_regions = [
+        FacialAreaRegion(x=0, y=0, w=img.shape[1], h=img.shape[0], confidence=0)
+        for img, _ in img_batch
+    ]
 
     if detector_backend == "skip":
-        face_objs = [DetectedFace(img=img, facial_area=base_region, confidence=0)]
+        face_objs_batch = [
+            DetectedFace(img=img, facial_area=base_region, confidence=0)
+            for ((img, _), base_region) in zip(img_batch, base_regions)
+        ]
     else:
-        face_objs = detect_faces(
+        face_objs_batch = detect_faces(
             detector_backend=detector_backend,
-            img=img,
+            img_batch=[img for img, _ in img_batch],
             align=align,
             expand_percentage=expand_percentage,
             max_faces=max_faces,
         )
 
-    # in case of no face found
-    if len(face_objs) == 0 and enforce_detection is True:
-        if img_name is not None:
-            raise ValueError(
-                f"Face could not be detected in {img_name}."
-                "Please confirm that the picture is a face photo "
-                "or consider to set enforce_detection param to False."
-            )
-        else:
-            raise ValueError(
-                "Face could not be detected. Please confirm that the picture is a face photo "
-                "or consider to set enforce_detection param to False."
-            )
+    resp_objs_batch = []
 
-    if len(face_objs) == 0 and enforce_detection is False:
-        face_objs = [DetectedFace(img=img, facial_area=base_region, confidence=0)]
+    for face_objs, (img, _), base_region in zip(
+        face_objs_batch, img_batch, base_regions
+    ):
+        face_objs = face_objs["faces"]
+        resp_objs = []
 
-    for face_obj in face_objs:
-        current_img = face_obj.img
-        current_region = face_obj.facial_area
+        if len(face_objs) == 0 and enforce_detection is False:
+            face_objs = [DetectedFace(img=img, facial_area=base_region, confidence=0)]
 
-        if current_img.shape[0] == 0 or current_img.shape[1] == 0:
-            continue
+        for face_obj in face_objs:
+            current_img = face_obj.img
+            current_region = face_obj.facial_area
 
-        if grayscale is True:
-            logger.warn("Parameter grayscale is deprecated. Use color_face instead.")
-            current_img = cv2.cvtColor(current_img, cv2.COLOR_BGR2GRAY)
-        else:
-            if color_face == "rgb":
-                current_img = current_img[:, :, ::-1]
-            elif color_face == "bgr":
-                pass  # image is in BGR
-            elif color_face == "gray":
+            if current_img.shape[0] == 0 or current_img.shape[1] == 0:
+                continue
+
+            if grayscale:
+                logger.warn(
+                    "Parameter grayscale is deprecated. Use color_face instead."
+                )
                 current_img = cv2.cvtColor(current_img, cv2.COLOR_BGR2GRAY)
             else:
-                raise ValueError(f"The color_face can be rgb, bgr or gray, but it is {color_face}.")
+                if color_face == "rgb":
+                    current_img = current_img[:, :, ::-1]
+                elif color_face == "bgr":
+                    pass
+                elif color_face == "gray":
+                    current_img = cv2.cvtColor(current_img, cv2.COLOR_BGR2GRAY)
+                else:
+                    raise ValueError(
+                        f"The color_face can be rgb, bgr or gray, but it is {color_face}."
+                    )
 
-        if normalize_face:
-            current_img = current_img / 255  # normalize input in [0, 1]
+            if normalize_face:
+                current_img = current_img / 255  # normalize input in [0, 1]
 
-        # cast to int for flask, and do final checks for borders
-        x = max(0, int(current_region.x))
-        y = max(0, int(current_region.y))
-        w = min(width - x - 1, int(current_region.w))
-        h = min(height - y - 1, int(current_region.h))
+            # cast to int for flask, and do final checks for borders
+            x = max(0, int(current_region.x))
+            y = max(0, int(current_region.y))
+            w = min(base_region.w - x - 1, int(current_region.w))
+            h = min(base_region.h - y - 1, int(current_region.h))
 
-        resp_obj = {
-            "face": current_img,
-            "facial_area": {
-                "x": x,
-                "y": y,
-                "w": w,
-                "h": h,
-                "left_eye": current_region.left_eye,
-                "right_eye": current_region.right_eye,
-            },
-            "confidence": round(current_region.confidence, 2),
-        }
+            resp_obj = {
+                "face": current_img,
+                "facial_area": {
+                    "x": x,
+                    "y": y,
+                    "w": w,
+                    "h": h,
+                    "left_eye": current_region.left_eye,
+                    "right_eye": current_region.right_eye,
+                },
+                "confidence": round(current_region.confidence, 2),
+            }
 
-        if anti_spoofing is True:
-            antispoof_model = modeling.build_model(task="spoofing", model_name="Fasnet")
-            is_real, antispoof_score = antispoof_model.analyze(img=img, facial_area=(x, y, w, h))
-            resp_obj["is_real"] = is_real
-            resp_obj["antispoof_score"] = antispoof_score
+            if anti_spoofing:
+                antispoof_model = modeling.build_model(
+                    task="spoofing", model_name="Fasnet"
+                )
+                is_real, antispoof_score = antispoof_model.analyze(
+                    img=img, facial_area=(x, y, w, h)
+                )
+                resp_obj["is_real"] = is_real
+                resp_obj["antispoof_score"] = antispoof_score
 
-        resp_objs.append(resp_obj)
+            resp_objs.append(resp_obj)
 
-    if len(resp_objs) == 0 and enforce_detection == True:
-        raise ValueError(
-            f"Exception while extracting faces from {img_name}."
-            "Consider to set enforce_detection arg to False."
-        )
+        resp_objs_batch.append({"faces": resp_objs})
 
-    return resp_objs
+    return resp_objs_batch
 
 
 def detect_faces(
-    detector_backend: str, img: np.ndarray,
-    align: bool = True, expand_percentage: int = 0,
-    max_faces: Optional[int] = None
+    detector_backend: str,
+    img_batch: List[np.ndarray],
+    align: bool = True,
+    expand_percentage: int = 0,
+    max_faces: Optional[int] = None,
 ) -> List[DetectedFace]:
     """
     Detect face(s) from a given image
     Args:
         detector_backend (str): detector name
 
-        img (np.ndarray): pre-loaded image
+        img_batch (List[np.ndarray]): List of pre-loaded images
 
         align (bool): enable or disable alignment after detection
 
@@ -206,7 +206,6 @@ def detect_faces(
 
         - confidence (float): The confidence score associated with the detected face.
     """
-    height, width, _ = img.shape
     face_detector: Detector = modeling.build_model(
         task="face_detector", model_name=detector_backend
     )
@@ -221,45 +220,62 @@ def detect_faces(
 
     # If faces are close to the upper boundary, alignment move them outside
     # Add a black border around an image to avoid this.
-    height_border = int(0.5 * height)
-    width_border = int(0.5 * width)
-    if align is True:
-        img = cv2.copyMakeBorder(
-            img,
-            height_border,
-            height_border,
-            width_border,
-            width_border,
-            cv2.BORDER_CONSTANT,
-            value=[0, 0, 0],  # Color of the border (black)
-        )
+    new_img_batch = []
+    for img in img_batch:
+        height, width, _ = img.shape
+        height_border = int(0.5 * height)
+        width_border = int(0.5 * width)
+        if align:
+            img = cv2.copyMakeBorder(
+                img,
+                height_border,
+                height_border,
+                width_border,
+                width_border,
+                cv2.BORDER_CONSTANT,
+                value=[0, 0, 0],  # Color of the border (black)
+            )
+        new_img_batch.append((img, (width_border, height_border)))
 
     # find facial areas of given image
-    facial_areas = face_detector.detect_faces(img)
-
-    if max_faces is not None and max_faces < len(facial_areas):
-        facial_areas = nlargest(
-            max_faces,
-            facial_areas,
-            key=lambda facial_area: facial_area.w * facial_area.h
+    facial_areas_batch = face_detector.detect_faces([img for img, _ in new_img_batch])
+    resp_batch = []
+    for facial_areas, (img, (width_border, height_border)) in zip(
+        facial_areas_batch, new_img_batch
+    ):
+        facial_areas = facial_areas["faces"]
+        if max_faces is not None and max_faces < len(facial_areas):
+            facial_areas = nlargest(
+                max_faces,
+                facial_areas,
+                key=lambda facial_area: facial_area.w * facial_area.h,
+            )
+        resp_batch.append(
+            {
+                "faces": [
+                    expand_and_align_face(
+                        facial_area=facial_area,
+                        img=img,
+                        align=align,
+                        expand_percentage=expand_percentage,
+                        width_border=width_border,
+                        height_border=height_border,
+                    )
+                    for facial_area in facial_areas
+                ]
+            }
         )
+    return resp_batch
 
-    return [
-        expand_and_align_face(
-            facial_area=facial_area,
-            img=img,
-            align=align,
-            expand_percentage=expand_percentage,
-            width_border=width_border,
-            height_border=height_border
-        )
-        for facial_area in facial_areas
-    ]
 
 def expand_and_align_face(
-    facial_area: FacialAreaRegion, img: np.ndarray,
-    align: bool, expand_percentage: int, width_border: int,
-    height_border: int) -> DetectedFace:
+    facial_area: FacialAreaRegion,
+    img: np.ndarray,
+    align: bool,
+    expand_percentage: int,
+    width_border: int,
+    height_border: int,
+) -> DetectedFace:
     x = facial_area.x
     y = facial_area.y
     w = facial_area.w
@@ -282,19 +298,23 @@ def expand_and_align_face(
     # extract detected face unaligned
     detected_face = img[int(y) : int(y + h), int(x) : int(x + w)]
     # align original image, then find projection of detected face area after alignment
-    if align is True:  # and left_eye is not None and right_eye is not None:
-        aligned_img, angle = align_img_wrt_eyes(img=img, left_eye=left_eye, right_eye=right_eye)
+    if align:  # and left_eye is not None and right_eye is not None:
+        aligned_img, angle = align_img_wrt_eyes(
+            img=img, left_eye=left_eye, right_eye=right_eye
+        )
 
         rotated_x1, rotated_y1, rotated_x2, rotated_y2 = project_facial_area(
-            facial_area=(x, y, x + w, y + h), angle=angle, size=(img.shape[0], img.shape[1])
+            facial_area=(x, y, x + w, y + h),
+            angle=angle,
+            size=(img.shape[0], img.shape[1]),
         )
         detected_face = aligned_img[
             int(rotated_y1) : int(rotated_y2), int(rotated_x1) : int(rotated_x2)
         ]
 
         # restore x, y, le and re before border added
-        x = x - width_border
-        y = y - height_border
+        x -= width_border
+        y -= height_border
         # w and h will not change
         if left_eye is not None:
             left_eye = (left_eye[0] - width_border, left_eye[1] - height_border)
@@ -304,10 +324,17 @@ def expand_and_align_face(
     return DetectedFace(
         img=detected_face,
         facial_area=FacialAreaRegion(
-            x=x, y=y, h=h, w=w, confidence=confidence, left_eye=left_eye, right_eye=right_eye
+            x=x,
+            y=y,
+            h=h,
+            w=w,
+            confidence=confidence,
+            left_eye=left_eye,
+            right_eye=right_eye,
         ),
         confidence=confidence,
     )
+
 
 def align_img_wrt_eyes(
     img: np.ndarray,
@@ -315,7 +342,7 @@ def align_img_wrt_eyes(
     right_eye: Union[list, tuple],
 ) -> Tuple[np.ndarray, float]:
     """
-    Align a given image horizantally with respect to their left and right eye locations
+    Align a given image horizontally with respect to their left and right eye locations
     Args:
         img (np.ndarray): pre-loaded image with detected face
         left_eye (list or tuple): coordinates of left eye with respect to the person itself
@@ -323,23 +350,23 @@ def align_img_wrt_eyes(
     Returns:
         img (np.ndarray): aligned facial image
     """
-    # if eye could not be detected for the given image, return image itself
-    if left_eye is None or right_eye is None:
+    if left_eye is None or right_eye is None or img.shape[0] == 0 or img.shape[1] == 0:
         return img, 0
 
-    # sometimes unexpectedly detected images come with nil dimensions
-    if img.shape[0] == 0 or img.shape[1] == 0:
-        return img, 0
-
-    angle = float(np.degrees(np.arctan2(left_eye[1] - right_eye[1], left_eye[0] - right_eye[0])))
+    angle = float(
+        np.degrees(np.arctan2(left_eye[1] - right_eye[1], left_eye[0] - right_eye[0]))
+    )
 
     (h, w) = img.shape[:2]
     center = (w // 2, h // 2)
     M = cv2.getRotationMatrix2D(center, angle, 1.0)
     img = cv2.warpAffine(
-        img, M, (w, h),
-        flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT,
-        borderValue=(0,0,0)
+        img,
+        M,
+        (w, h),
+        flags=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=(0, 0, 0),
     )
 
     return img, angle
@@ -351,7 +378,7 @@ def project_facial_area(
     """
     Update pre-calculated facial area coordinates after image itself
         rotated with respect to the eyes.
-    Inspried from the work of @UmutDeniz26 - github.com/serengil/retinaface/pull/80
+    Inspired from the work of @UmutDeniz26 - github.com/serengil/retinaface/pull/80
 
     Args:
         facial_area (tuple of int): Representing the (x1, y1, x2, y2) of the facial area.
@@ -377,10 +404,10 @@ def project_facial_area(
     # Angle in radians
     angle = angle * np.pi / 180
 
-    height, weight = size
+    height, width = size
 
     # Translate the facial area to the center of the image
-    x = (facial_area[0] + facial_area[2]) / 2 - weight / 2
+    x = (facial_area[0] + facial_area[2]) / 2 - width / 2
     y = (facial_area[1] + facial_area[3]) / 2 - height / 2
 
     # Rotate the facial area
@@ -388,7 +415,7 @@ def project_facial_area(
     y_new = -x * direction * np.sin(angle) + y * np.cos(angle)
 
     # Translate the facial area back to the original position
-    x_new = x_new + weight / 2
+    x_new = x_new + width / 2
     y_new = y_new + height / 2
 
     # Calculate projected coordinates after alignment
@@ -400,7 +427,7 @@ def project_facial_area(
     # validate projected coordinates are in image's boundaries
     x1 = max(int(x1), 0)
     y1 = max(int(y1), 0)
-    x2 = min(int(x2), weight)
+    x2 = min(int(x2), width)
     y2 = min(int(y2), height)
 
     return (x1, y1, x2, y2)

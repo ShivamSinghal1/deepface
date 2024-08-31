@@ -1,6 +1,7 @@
-from typing import Any, Union, List
+from typing import Any, Union, List, Dict
 import cv2
 import numpy as np
+from deepface.modules import preprocessing
 from deepface.models.Detector import Detector, FacialAreaRegion
 
 # Link -> https://github.com/timesler/facenet-pytorch
@@ -11,47 +12,72 @@ class FastMtCnnClient(Detector):
     def __init__(self):
         self.model = self.build_model()
 
-    def detect_faces(self, img: np.ndarray) -> List[FacialAreaRegion]:
+    def detect_faces(
+        self, img: List[np.ndarray]
+    ) -> List[Dict[str, List[FacialAreaRegion]]]:
         """
         Detect and align face with mtcnn
 
         Args:
-            img (np.ndarray): pre-loaded image as numpy array
+            img (List[np.ndarray]): List of pre-loaded images as numpy arrays
 
         Returns:
-            results (List[FacialAreaRegion]): A list of FacialAreaRegion objects
+            results (List[Dict[str, List[FacialAreaRegion]]]): A list of dictionaries containing FacialAreaRegion objects
         """
-        resp = []
+        max_height = max(image.shape[0] for image in img)
+        max_width = max(image.shape[1] for image in img)
+        common_dim = (max_width, max_height)
 
-        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)  # mtcnn expects RGB but OpenCV read BGR
-        detections = self.model.detect(
-            img_rgb, landmarks=True
-        )  # returns boundingbox, prob, landmark
-        if (
-            detections is not None
-            and len(detections) > 0
-            and not any(detection is None for detection in detections)  # issue 1043
-        ):
-            for regions, confidence, eyes in zip(*detections):
-                x, y, w, h = xyxy_to_xywh(regions)
-                right_eye = eyes[0]
-                left_eye = eyes[1]
+        img_rgb_batch = []
+        original_dims = []
 
-                left_eye = tuple(int(i) for i in left_eye)
-                right_eye = tuple(int(i) for i in right_eye)
+        for image in img:
+            original_dims.append(image.shape[:2])
+            rgb_img = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            # resized_image = preprocessing.resize_image(rgb_img, common_dim)
+            img_rgb_batch.append(rgb_img)
 
-                facial_area = FacialAreaRegion(
-                    x=x,
-                    y=y,
-                    w=w,
-                    h=h,
-                    left_eye=left_eye,
-                    right_eye=right_eye,
-                    confidence=confidence,
-                )
-                resp.append(facial_area)
+        # img_rgb_batch = np.squeeze(np.array(img_rgb_batch), axis=1)
+        # print(img_rgb_batch.shape)
+        detections_batch = self.model.detect(img_rgb_batch, landmarks=True)
 
-        return resp
+        print(detections_batch)
+        resp_batch = []
+        if detections_batch is not None and len(detections_batch) > 0:
+            for regions_batch, confidence_batch, eyes_batch, original_dim in zip(
+                *detections_batch, original_dims
+            ):
+                resp = []
+                for regions, confidence, eyes in zip(
+                    regions_batch, confidence_batch, eyes_batch
+                ):
+                    scale_x = original_dim[1] / common_dim[0]
+                    scale_y = original_dim[0] / common_dim[1]
+                    regions = [
+                        regions[0] * scale_x,
+                        regions[1] * scale_y,
+                        regions[2] * scale_x,
+                        regions[3] * scale_y,
+                    ]
+
+                    x, y, w, h = xyxy_to_xywh(regions)
+                    right_eye = tuple(int(i * scale_x) for i in eyes[0])
+                    left_eye = tuple(int(i * scale_y) for i in eyes[1])
+
+                    facial_area = FacialAreaRegion(
+                        x=x,
+                        y=y,
+                        w=w,
+                        h=h,
+                        left_eye=left_eye,
+                        right_eye=right_eye,
+                        confidence=confidence,
+                    )
+                    resp.append(facial_area)
+
+                resp_batch.append({"faces": resp})
+
+        return resp_batch
 
     def build_model(self) -> Any:
         """
@@ -69,10 +95,8 @@ class FastMtCnnClient(Detector):
                 "Please install using 'pip install facenet-pytorch'"
             ) from e
 
-        device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-        face_detector = fast_mtcnn(device=device)
-
-        return face_detector
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        return fast_mtcnn(device=device)
 
 
 def xyxy_to_xywh(regions: Union[list, tuple]) -> tuple:
@@ -83,7 +107,7 @@ def xyxy_to_xywh(regions: Union[list, tuple]) -> tuple:
     Returns:
         regions (tuple): facial area coordinates as x, y, w, h
     """
-    x, y, x_plus_w, y_plus_h = regions[0], regions[1], regions[2], regions[3]
+    x, y, x_plus_w, y_plus_h = regions
     w = x_plus_w - x
     h = y_plus_h - y
     return (x, y, w, h)

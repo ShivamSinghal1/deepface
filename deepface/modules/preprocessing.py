@@ -91,7 +91,7 @@ def resize_image(img: np.ndarray, target_size: Tuple[int, int]) -> np.ndarray:
         int(img.shape[1] * factor),
         int(img.shape[0] * factor),
     )
-    img = cv2.resize(img, dsize)
+    img = cv2.resize(img, dsize, interpolation=cv2.INTER_LINEAR)
 
     diff_0 = target_size[0] - img.shape[0]
     diff_1 = target_size[1] - img.shape[1]

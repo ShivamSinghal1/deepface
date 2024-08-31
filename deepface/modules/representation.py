@@ -11,7 +11,7 @@ from deepface.models.FacialRecognition import FacialRecognition
 
 
 def represent(
-    img_path: Union[str, np.ndarray],
+    img_path: List[Union[str, np.ndarray]],
     model_name: str = "VGG-Face",
     enforce_detection: bool = True,
     detector_backend: str = "opencv",
@@ -20,7 +20,8 @@ def represent(
     normalization: str = "base",
     anti_spoofing: bool = False,
     max_faces: Optional[int] = None,
-) -> List[Dict[str, Any]]:
+    embedding_normalize: bool = False,
+) -> List[Dict[str, List[Dict[str, Any]]]]:
     """
     Represent facial images as multi-dimensional vector embeddings.
 
@@ -63,7 +64,7 @@ def represent(
         - face_confidence (float): Confidence score of face detection. If `detector_backend` is set
             to 'skip', the confidence will be 0 and is nonsensical.
     """
-    resp_objs = []
+    resp_objs_batch = []
 
     model: FacialRecognition = modeling.build_model(
         task="facial_recognition", model_name=model_name
@@ -73,7 +74,7 @@ def represent(
     # we have run pre-process in verification. so, this can be skipped if it is coming from verify.
     target_size = model.input_shape
     if detector_backend != "skip":
-        img_objs = detection.extract_faces(
+        img_objs_batch = detection.extract_faces(
             img_path=img_path,
             detector_backend=detector_backend,
             grayscale=False,
@@ -91,54 +92,88 @@ def represent(
             raise ValueError(f"Input img must be 3 dimensional but it is {img.shape}")
 
         # make dummy region and confidence to keep compatibility with `extract_faces`
-        img_objs = [
+        img_objs_batch = [
             {
-                "face": img,
-                "facial_area": {"x": 0, "y": 0, "w": img.shape[0], "h": img.shape[1]},
-                "confidence": 0,
+                "faces": [
+                    {
+                        "face": img,
+                        "facial_area": {
+                            "x": 0,
+                            "y": 0,
+                            "w": img.shape[0],
+                            "h": img.shape[1],
+                        },
+                        "confidence": 0,
+                    }
+                ]
             }
         ]
     # ---------------------------------
 
-    if max_faces is not None and max_faces < len(img_objs):
-        # sort as largest facial areas come first
-        img_objs = sorted(
-            img_objs,
-            key=lambda img_obj: img_obj["facial_area"]["w"] * img_obj["facial_area"]["h"],
-            reverse=True,
-        )
-        # discard rest of the items
-        img_objs = img_objs[0:max_faces]
+    # if max_faces is not None and max_faces < len(img_objs):
+    #     # sort as largest facial areas come first
+    #     img_objs = sorted(
+    #         img_objs,
+    #         key=lambda img_obj: img_obj["facial_area"]["w"] * img_obj["facial_area"]["h"],
+    #         reverse=True,
+    #     )
+    #     # discard rest of the items
+    #     img_objs = img_objs[0:max_faces]
 
-    for img_obj in img_objs:
-        if anti_spoofing is True and img_obj.get("is_real", True) is False:
-            raise ValueError("Spoof detected in the given image.")
-        img = img_obj["face"]
+    images_batch = []
+    for img_objs in img_objs_batch:
+        for img_obj in img_objs["faces"]:
+            if anti_spoofing is True and img_obj.get("is_real", True) is False:
+                continue
+            img = img_obj["face"]
 
-        # rgb to bgr
-        img = img[:, :, ::-1]
+            # rgb to bgr
+            img = img[:, :, ::-1]
 
-        region = img_obj["facial_area"]
-        confidence = img_obj["confidence"]
+            # resize to expected shape of ml model
+            img = preprocessing.resize_image(
+                img=img,
+                # thanks to DeepId (!)
+                target_size=(target_size[1], target_size[0]),
+            )
 
-        # resize to expected shape of ml model
-        img = preprocessing.resize_image(
-            img=img,
-            # thanks to DeepId (!)
-            target_size=(target_size[1], target_size[0]),
-        )
+            # custom normalization
+            img = preprocessing.normalize_input(img=img, normalization=normalization)
+            images_batch.append(img)
 
-        # custom normalization
-        img = preprocessing.normalize_input(img=img, normalization=normalization)
+    images_batch = np.squeeze(np.array(images_batch), axis=1)
+    embedding = model.forward(images_batch)
+    idx = 0
 
-        embedding = model.forward(img)
+    for img_objs in img_objs_batch:
+        resp_objs = []
+        for img_obj in img_objs["faces"]:
+            img_obj.pop("face")
+            if anti_spoofing is True and img_obj.get("is_real", True) is False:
+                resp_objs.append(
+                    {
+                        "embedding": [],
+                        "facial_area": img_obj,
+                    }
+                )
+                continue
+            img_embedding = embedding[idx]
+            idx += 1
+            if embedding_normalize:
+                norm = np.linalg.norm(img_embedding)
+                if norm != 0:
+                    img_embedding = img_embedding / norm
 
-        resp_objs.append(
-            {
-                "embedding": embedding,
-                "facial_area": region,
-                "face_confidence": confidence,
-            }
-        )
+            if isinstance(img_embedding, np.ndarray):
+                img_embedding = img_embedding.tolist()
 
-    return resp_objs
+            resp_objs.append(
+                {
+                    "embedding": img_embedding,
+                    "facial_area": img_obj,
+                }
+            )
+
+        resp_objs_batch.append({"faces": resp_objs})
+
+    return resp_objs_batch

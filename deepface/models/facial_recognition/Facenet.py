@@ -84,7 +84,7 @@ class FaceNet512dONNXClient(FacialRecognition):
         input_name = self.model.get_inputs()[0].name
         output_name = self.model.get_outputs()[0].name
         result = self.model.run([output_name], {input_name: img})
-        return result[0][0].tolist()
+        return result[0]
 
 
 def scaling(x, scale):
@@ -1734,7 +1734,7 @@ def load_facenet512d_model(
 
 
 def load_facenet512d_onnx_model(
-    url="https://github.com/ShivamSinghal1/deepface/releases/download/v1/facenet512_fp32.onnx",
+    url="https://github.com/ShivamSinghal1/deepface/releases/download/v1.0.0/facenet512_fp32.onnx",
 ) -> Any:
     """
     Download Facenet512d ONNX model weights and load
