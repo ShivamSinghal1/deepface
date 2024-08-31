@@ -141,8 +141,9 @@ def represent(
             img = preprocessing.normalize_input(img=img, normalization=normalization)
             images_batch.append(img)
 
-    images_batch = np.squeeze(np.array(images_batch), axis=1)
-    embedding = model.forward(images_batch)
+    if len(images_batch) != 0:
+        images_batch = np.squeeze(np.array(images_batch), axis=1)
+        embedding = model.forward(images_batch)
     idx = 0
 
     for img_objs in img_objs_batch:
