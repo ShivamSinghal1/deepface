@@ -2,7 +2,7 @@
 # Ref: github.com/minivision-ai/Silent-Face-Anti-Spoofing/blob/master/src/model_lib/MiniFASNet.py
 
 # built-in dependencies
-from typing import Union
+from typing import Union, List, Tuple
 
 # 3rd party dependencies
 import cv2
@@ -13,6 +13,7 @@ from deepface.commons import folder_utils, file_utils
 from deepface.commons.logger import Logger
 
 logger = Logger()
+
 
 # pylint: disable=line-too-long, too-few-public-methods
 class Fasnet:
@@ -75,7 +76,8 @@ class Fasnet:
 
         # load model weight for second model
         state_dict = torch.load(
-            f"{home}/.deepface/weights/4_0_0_80x80_MiniFASNetV1SE.pth", map_location=device
+            f"{home}/.deepface/weights/4_0_0_80x80_MiniFASNetV1SE.pth",
+            map_location=device,
         )
         keys = iter(state_dict)
         first_layer_name = keys.__next__()
@@ -98,53 +100,65 @@ class Fasnet:
         self.first_model = first_model
         self.second_model = second_model
 
-    def analyze(self, img: np.ndarray, facial_area: Union[list, tuple]):
+    def analyze(
+        self, imgs: List[np.ndarray], facial_areas: List[Union[list, tuple]]
+    ) -> List[Tuple[bool, float]]:
         """
-        Analyze a given image spoofed or not
+        Analyze a batch of images to determine if they are spoofed or not.
         Args:
-            img (np.ndarray): pre loaded image
-            facial_area (list or tuple): facial rectangle area coordinates with x, y, w, h respectively
+            imgs (List[np.ndarray]): List of pre-loaded images.
+            facial_areas (List[list or tuple]): List of facial rectangle area coordinates with x, y, w, h respectively.
         Returns:
-            result (tuple): a result tuple consisting of is_real and score
+            results (List[tuple]): A list of result tuples consisting of is_real and score for each image.
         """
         import torch
         import torch.nn.functional as F
 
-        x, y, w, h = facial_area
-        first_img = crop(img, (x, y, w, h), 2.7, 80, 80)
-        second_img = crop(img, (x, y, w, h), 4, 80, 80)
+        assert len(imgs) == len(
+            facial_areas
+        ), "The number of images must match the number of facial areas."
 
-        test_transform = Compose(
-            [
-                ToTensor(),
-            ]
-        )
+        test_transform = Compose([ToTensor()])
 
-        first_img = test_transform(first_img)
-        first_img = first_img.unsqueeze(0).to(self.device)
+        first_imgs = []
+        second_imgs = []
 
-        second_img = test_transform(second_img)
-        second_img = second_img.unsqueeze(0).to(self.device)
+        for img, facial_area in zip(imgs, facial_areas):
+            x, y, w, h = facial_area
+            first_img = crop(img, (x, y, w, h), 2.7, 80, 80)
+            second_img = crop(img, (x, y, w, h), 4, 80, 80)
+
+            first_img = test_transform(first_img)
+            second_img = test_transform(second_img)
+
+            first_imgs.append(first_img)
+            second_imgs.append(second_img)
+
+        first_imgs = torch.stack(first_imgs).to(self.device)
+        second_imgs = torch.stack(second_imgs).to(self.device)
 
         with torch.no_grad():
-            first_result = self.first_model.forward(first_img)
-            first_result = F.softmax(first_result).cpu().numpy()
+            first_results = self.first_model.forward(first_imgs)
+            first_results = F.softmax(first_results, dim=1).cpu().numpy()
 
-            second_result = self.second_model.forward(second_img)
-            second_result = F.softmax(second_result).cpu().numpy()
+            second_results = self.second_model.forward(second_imgs)
+            second_results = F.softmax(second_results, dim=1).cpu().numpy()
 
-        prediction = np.zeros((1, 3))
-        prediction += first_result
-        prediction += second_result
+        predictions = first_results + second_results
 
-        label = np.argmax(prediction)
-        is_real = True if label == 1 else False  # pylint: disable=simplifiable-if-expression
-        score = prediction[0][label] / 2
+        results = []
+        for prediction in predictions:
+            label = np.argmax(prediction)
+            is_real = (
+                True if label == 1 else False
+            )  # pylint: disable=simplifiable-if-expression
+            score = prediction[label] / 2
+            results.append((is_real, score))
 
-        return is_real, score
+        return results
 
 
-# subsdiary classes and functions
+# subsidiary classes and functions
 
 
 def to_tensor(pic):
@@ -217,7 +231,9 @@ def _get_new_box(src_w, src_h, bbox, scale):
 
 def crop(org_img, bbox, scale, out_w, out_h):
     src_h, src_w, _ = np.shape(org_img)
-    left_top_x, left_top_y, right_bottom_x, right_bottom_y = _get_new_box(src_w, src_h, bbox, scale)
+    left_top_x, left_top_y, right_bottom_x, right_bottom_y = _get_new_box(
+        src_w, src_h, bbox, scale
+    )
     img = org_img[left_top_y : right_bottom_y + 1, left_top_x : right_bottom_x + 1]
     dst_img = cv2.resize(img, (out_w, out_h))
     return dst_img

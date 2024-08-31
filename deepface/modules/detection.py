@@ -1,5 +1,6 @@
 # built-in dependencies
 import time
+import concurrent.futures
 from typing import Any, Dict, List, Tuple, Union, Optional
 
 # 3rd part dependencies
@@ -15,6 +16,8 @@ from deepface.commons import image_utils
 from deepface.commons.logger import Logger
 
 logger = Logger()
+# Create a global ThreadPoolExecutor
+global_executor = concurrent.futures.ThreadPoolExecutor()
 
 # pylint: disable=no-else-raise
 
@@ -105,8 +108,12 @@ def extract_faces(
 
     resp_objs_batch = []
 
-    for face_objs, (img, _), base_region in zip(
-        face_objs_batch, img_batch, base_regions
+    all_faces = []
+    all_facial_areas = []
+    all_img_indices = []
+
+    for img_index, (face_objs, (img, _), base_region) in enumerate(
+        zip(face_objs_batch, img_batch, base_regions)
     ):
         face_objs = face_objs["faces"]
         resp_objs = []
@@ -161,18 +168,27 @@ def extract_faces(
             }
 
             if anti_spoofing:
-                antispoof_model = modeling.build_model(
-                    task="spoofing", model_name="Fasnet"
-                )
-                is_real, antispoof_score = antispoof_model.analyze(
-                    img=img, facial_area=(x, y, w, h)
-                )
-                resp_obj["is_real"] = is_real
-                resp_obj["antispoof_score"] = antispoof_score
+                all_faces.append(img)
+                all_facial_areas.append((x, y, w, h))
+                all_img_indices.append((img_index, len(resp_objs)))
 
             resp_objs.append(resp_obj)
 
         resp_objs_batch.append({"faces": resp_objs})
+
+    if anti_spoofing and all_faces:
+        antispoof_model = modeling.build_model(task="spoofing", model_name="Fasnet")
+        antispoof_results = antispoof_model.analyze(
+            imgs=all_faces, facial_areas=all_facial_areas
+        )
+
+        for (img_index, face_index), (is_real, antispoof_score) in zip(
+            all_img_indices, antispoof_results
+        ):
+            resp_objs_batch[img_index]["faces"][face_index]["is_real"] = is_real
+            resp_objs_batch[img_index]["faces"][face_index][
+                "antispoof_score"
+            ] = antispoof_score
 
     return resp_objs_batch
 
@@ -240,7 +256,9 @@ def detect_faces(
 
     # find facial areas of given image
     facial_areas_batch = face_detector.detect_faces([img for img, _ in new_img_batch])
-    resp_batch = []
+
+    # Collect all facial areas
+    all_facial_areas = []
     for facial_areas, (img, (width_border, height_border)) in zip(
         facial_areas_batch, new_img_batch
     ):
@@ -251,21 +269,33 @@ def detect_faces(
                 facial_areas,
                 key=lambda facial_area: facial_area.w * facial_area.h,
             )
-        resp_batch.append(
-            {
-                "faces": [
-                    expand_and_align_face(
-                        facial_area=facial_area,
-                        img=img,
-                        align=align,
-                        expand_percentage=expand_percentage,
-                        width_border=width_border,
-                        height_border=height_border,
-                    )
-                    for facial_area in facial_areas
-                ]
-            }
-        )
+        for facial_area in facial_areas:
+            all_facial_areas.append(
+                (
+                    facial_area,
+                    img,
+                    align,
+                    expand_percentage,
+                    width_border,
+                    height_border,
+                )
+            )
+
+    # Parallel processing of facial areas using the global executor
+    results = list(
+        global_executor.map(lambda p: expand_and_align_face(*p), all_facial_areas)
+    )
+
+    # Organize results back into the original structure
+    resp_batch = []
+    index = 0
+    for facial_areas, (img, _) in zip(facial_areas_batch, new_img_batch):
+        faces = []
+        for _ in facial_areas["faces"]:
+            faces.append(results[index])
+            index += 1
+        resp_batch.append({"faces": faces})
+
     return resp_batch
 
 
