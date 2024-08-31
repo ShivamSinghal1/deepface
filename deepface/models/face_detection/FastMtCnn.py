@@ -24,6 +24,7 @@ class FastMtCnnClient(Detector):
         Returns:
             results (List[Dict[str, List[FacialAreaRegion]]]): A list of dictionaries containing FacialAreaRegion objects
         """
+        # cv2.imwrite(f"image_before_faces_{len(img)}.jpg", img[0])
         max_width = max(image.shape[0] for image in img)
         max_height = max(image.shape[1] for image in img)
         common_dim = (max_width, max_height)
@@ -66,11 +67,19 @@ class FastMtCnnClient(Detector):
         detections_batch = self.model.detect(img_rgb_batch, landmarks=True)
         resp_batch = []
         if detections_batch is not None and len(detections_batch) > 0:
-            for regions_batch, confidence_batch, eyes_batch, original_dim, image in zip(
-                *detections_batch, original_dims, img
-            ):
+            for idx, (
+                regions_batch,
+                confidence_batch,
+                eyes_batch,
+                original_dim,
+                image,
+            ) in enumerate(zip(*detections_batch, original_dims, img)):
                 resp = []
-                if regions_batch is None or confidence_batch is None or eyes_batch is None:
+                if (
+                    regions_batch is None
+                    or confidence_batch is None
+                    or eyes_batch is None
+                ):
                     resp_batch.append({"faces": []})
                     continue
                 for regions, confidence, eyes in zip(
@@ -88,8 +97,8 @@ class FastMtCnnClient(Detector):
                     ]
 
                     x, y, w, h = xyxy_to_xywh(regions)
-                    right_eye = tuple(int(i * scale_x) for i in eyes[0])
-                    left_eye = tuple(int(i * scale_y) for i in eyes[1])
+                    right_eye = (int(eyes[0][0] * scale_x), int(eyes[0][1] * scale_y))
+                    left_eye = (int(eyes[1][0] * scale_x), int(eyes[1][1] * scale_y))
 
                     facial_area = FacialAreaRegion(
                         x=x,
@@ -101,11 +110,11 @@ class FastMtCnnClient(Detector):
                         confidence=confidence,
                     )
                     resp.append(facial_area)
-                    # Draw bounding box on the image
-                    # draw_bounding_box(image, (x, y, w, h))
+                    # Draw bounding box on the image (for debug)
+                    # draw_bounding_box(image, (x, y, w, h), left_eye, right_eye)
 
                 resp_batch.append({"faces": resp})
-                # cv2.imwrite(f"image_with_faces_{len(resp_batch)}.jpg", img_bgr)
+                # cv2.imwrite(f"image_with_faces_{idx}.jpg", image)
 
         return resp_batch
 
@@ -143,12 +152,30 @@ def xyxy_to_xywh(regions: Union[list, tuple]) -> tuple:
     return (x, y, w, h)
 
 
-def draw_bounding_box(image: np.ndarray, box: tuple) -> None:
+def draw_bounding_box(
+    image: np.ndarray, box: tuple, left_eye: tuple, right_eye: tuple
+) -> None:
     """
     Draw a bounding box on the image.
     Args:
         image (np.ndarray): The image on which to draw the bounding box.
         box (tuple): The bounding box coordinates (x, y, w, h).
+        left_eye (tuple): The left eye coordinates (x, y).
+        right_eye (tuple): The right eye coordinates (x, y).
     """
     x, y, w, h = box
     cv2.rectangle(image, (int(x), int(y)), (int(x + w), int(y + h)), (0, 255, 0), 2)
+    cv2.rectangle(
+        image,
+        (int(left_eye[0] - 5), int(left_eye[1] - 5)),
+        (int(left_eye[0] + 5), int(left_eye[1] + 5)),
+        (255, 0, 0),
+        2,
+    )
+    cv2.rectangle(
+        image,
+        (int(right_eye[0] - 5), int(right_eye[1] - 5)),
+        (int(right_eye[0] + 5), int(right_eye[1] + 5)),
+        (255, 0, 0),
+        2,
+    )

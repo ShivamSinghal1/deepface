@@ -1,4 +1,5 @@
 # built-in dependencies
+import time
 from typing import Any, Dict, List, Tuple, Union, Optional
 
 # 3rd part dependencies
@@ -297,6 +298,9 @@ def expand_and_align_face(
 
     # extract detected face unaligned
     detected_face = img[int(y) : int(y + h), int(x) : int(x + w)]
+
+    # cv2.imwrite(f"face_before_{time.time() * 1000}.jpg", detected_face)
+
     # align original image, then find projection of detected face area after alignment
     if align:  # and left_eye is not None and right_eye is not None:
         aligned_img, angle = align_img_wrt_eyes(
@@ -320,6 +324,8 @@ def expand_and_align_face(
             left_eye = (left_eye[0] - width_border, left_eye[1] - height_border)
         if right_eye is not None:
             right_eye = (right_eye[0] - width_border, right_eye[1] - height_border)
+
+    # cv2.imwrite(f"face_after_{time.time()*1000}.jpg", detected_face)
 
     return DetectedFace(
         img=detected_face,
