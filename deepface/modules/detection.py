@@ -1,4 +1,5 @@
 # built-in dependencies
+import logging
 import time
 import concurrent.futures
 from typing import Any, Dict, List, Tuple, Union, Optional
@@ -281,10 +282,12 @@ def detect_faces(
                 )
             )
 
+    start_time = time.time()*1000
     # Parallel processing of facial areas using the global executor
     results = list(
         global_executor.map(lambda p: expand_and_align_face(*p), all_facial_areas)
     )
+    logging.info("Time taken in alignment: %s ms", str(time.time()*1000 - start_time))
 
     # Organize results back into the original structure
     resp_batch = []
