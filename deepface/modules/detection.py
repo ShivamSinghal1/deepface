@@ -1,155 +1,82 @@
-# built-in dependencies
-import logging
-import time
-import concurrent.futures
-from typing import Any, Dict, List, Tuple, Union, Optional
+import torch
+import torch.nn.functional as F
+import math
+from typing import List, Dict, Any, Tuple
 
-# 3rd part dependencies
-from heapq import nlargest
-import numpy as np
-import cv2
+import kornia
 
-# project dependencies
 from deepface.modules import modeling
 from deepface.models.Detector import Detector, DetectedFace, FacialAreaRegion
-from deepface.commons import image_utils
 
-from deepface.commons.logger import Logger
 
-logger = Logger()
-# Create a global ThreadPoolExecutor
-global_executor = concurrent.futures.ThreadPoolExecutor()
+def save_images(img: List[torch.Tensor], prefix: str):
+    """
+    Save images to disk.
 
-# pylint: disable=no-else-raise
+    Args:
+        img (List[torch.Tensor]): List of images to save.
+        prefix (str): Prefix for the filenames.
+    """
+    import cv2
+
+    for idx, image in enumerate(img):
+        if isinstance(image, torch.Tensor):
+            image = image.permute(1, 2, 0).cpu().numpy()
+        filename = f"{prefix}_image_{idx}.jpg"
+        cv2.imwrite(filename, image[..., ::-1])  # Convert RGB to BGR for OpenCV
 
 
 def extract_faces(
-    img_path: List[Union[str, np.ndarray]],
+    img_tensors: List[torch.Tensor],
     detector_backend: str = "opencv",
-    enforce_detection: bool = True,
     align: bool = True,
     expand_percentage: int = 0,
-    grayscale: bool = False,
-    color_face: str = "rgb",
-    normalize_face: bool = True,
     anti_spoofing: bool = False,
-    max_faces: Optional[int] = None,
 ) -> List[Dict[str, List[Dict[str, Any]]]]:
     """
-    Extract faces from a given image
+    Extract faces from given images.
 
     Args:
-        img_path (List[Union[str, np.ndarray]]): List of paths to images or numpy arrays.
-
-        detector_backend (str): face detector backend. Options: 'opencv', 'retinaface',
-            'mtcnn', 'ssd', 'dlib', 'mediapipe', 'yolov8', 'centerface' or 'skip'
-            (default is opencv)
-
-        enforce_detection (bool): If no face is detected in an image, raise an exception.
-            Default is True. Set to False to avoid the exception for low-resolution images.
-
-        align (bool): Flag to enable face alignment (default is True).
-
-        expand_percentage (int): expand detected facial area with a percentage.
-
-        grayscale (bool): (Deprecated) Flag to convert the output face image to grayscale
-            (default is False).
-
-        color_face (str): Color to return face image output. Options: 'rgb', 'bgr' or 'gray'
-            (default is 'rgb').
-
-        normalize_face (bool): Flag to enable normalization (divide by 255) of the output
-            face image output face image normalization (default is True).
-
-        anti_spoofing (bool): Flag to enable anti spoofing (default is False).
+        img_path (List[torch.Tensor]): List of image tensors.
+        detector_backend (str): Face detector backend.
+        align (bool): Align faces.
+        expand_percentage (int): Expand detected facial area.
+        normalize_face (bool): Normalize output face pixels.
+        anti_spoofing (bool): Perform anti-spoofing check.
 
     Returns:
-        results (List[Dict[str, Any]]): A list of dictionaries, where each dictionary contains:
-
-        - "face" (np.ndarray): The detected face as a NumPy array in RGB format.
-
-        - "facial_area" (Dict[str, Any]): The detected face's regions as a dictionary containing:
-            - keys 'x', 'y', 'w', 'h' with int values
-            - keys 'left_eye', 'right_eye' with a tuple of 2 ints as values.
-                left eye and right eye are eyes on the left and right respectively with respect
-                to the person itself instead of observer.
-
-        - "confidence" (float): The confidence score associated with the detected face.
-
-        - "is_real" (bool): antispoofing analyze result. this key is just available in the
-            result only if anti_spoofing is set to True in input arguments.
-
-        - "antispoof_score" (float): score of antispoofing analyze result. this key is
-            just available in the result only if anti_spoofing is set to True in input arguments.
+        List[Dict[str, List[Dict[str, Any]]]]: List of dictionaries containing detected faces and their properties.
     """
-
-    # img might be path, base64 or numpy array. Convert it to numpy whatever it is.
-    if not isinstance(img_path, list):
-        img_path = [img_path]
-
-    img_batch = image_utils.load_image_batch(img_path)
     base_regions = [
-        FacialAreaRegion(x=0, y=0, w=img.shape[1], h=img.shape[0], confidence=0)
-        for img, _ in img_batch
+        FacialAreaRegion(x=0, y=0, w=img.shape[2], h=img.shape[1], confidence=0)
+        for img in img_tensors
     ]
 
-    if detector_backend == "skip":
-        face_objs_batch = [
-            DetectedFace(img=img, facial_area=base_region, confidence=0)
-            for ((img, _), base_region) in zip(img_batch, base_regions)
-        ]
-    else:
-        face_objs_batch = detect_faces(
-            detector_backend=detector_backend,
-            img_batch=[img for img, _ in img_batch],
-            align=align,
-            expand_percentage=expand_percentage,
-            max_faces=max_faces,
-        )
+    face_objs_batch = detect_faces(
+        detector_backend=detector_backend,
+        img_batch=img_tensors,
+        align=align,
+        expand_percentage=expand_percentage,
+    )
 
     resp_objs_batch = []
-
     all_faces = []
     all_facial_areas = []
     all_img_indices = []
 
-    for img_index, (face_objs, (img, _), base_region) in enumerate(
-        zip(face_objs_batch, img_batch, base_regions)
+    for img_index, (face_objs, img_tensor, base_region) in enumerate(
+        zip(face_objs_batch, img_tensors, base_regions)
     ):
         face_objs = face_objs["faces"]
         resp_objs = []
-
-        if len(face_objs) == 0 and enforce_detection is False:
-            face_objs = [DetectedFace(img=img, facial_area=base_region, confidence=0)]
 
         for face_obj in face_objs:
             current_img = face_obj.img
             current_region = face_obj.facial_area
 
-            if current_img.shape[0] == 0 or current_img.shape[1] == 0:
+            if current_img.shape[1] == 0 or current_img.shape[2] == 0:
                 continue
 
-            if grayscale:
-                logger.warn(
-                    "Parameter grayscale is deprecated. Use color_face instead."
-                )
-                current_img = cv2.cvtColor(current_img, cv2.COLOR_BGR2GRAY)
-            else:
-                if color_face == "rgb":
-                    current_img = current_img[:, :, ::-1]
-                elif color_face == "bgr":
-                    pass
-                elif color_face == "gray":
-                    current_img = cv2.cvtColor(current_img, cv2.COLOR_BGR2GRAY)
-                else:
-                    raise ValueError(
-                        f"The color_face can be rgb, bgr or gray, but it is {color_face}."
-                    )
-
-            if normalize_face:
-                current_img = current_img / 255  # normalize input in [0, 1]
-
-            # cast to int for flask, and do final checks for borders
             x = max(0, int(current_region.x))
             y = max(0, int(current_region.y))
             w = min(base_region.w - x - 1, int(current_region.w))
@@ -165,11 +92,11 @@ def extract_faces(
                     "left_eye": current_region.left_eye,
                     "right_eye": current_region.right_eye,
                 },
-                "confidence": round(current_region.confidence, 2),
+                "confidence": round(float(current_region.confidence), 2),
             }
 
             if anti_spoofing:
-                all_faces.append(img)
+                all_faces.append(img_tensor)
                 all_facial_areas.append((x, y, w, h))
                 all_img_indices.append((img_index, len(resp_objs)))
 
@@ -196,103 +123,48 @@ def extract_faces(
 
 def detect_faces(
     detector_backend: str,
-    img_batch: List[np.ndarray],
+    img_batch: List[torch.Tensor],
     align: bool = True,
     expand_percentage: int = 0,
-    max_faces: Optional[int] = None,
 ) -> List[DetectedFace]:
-    """
-    Detect face(s) from a given image
-    Args:
-        detector_backend (str): detector name
-
-        img_batch (List[np.ndarray]): List of pre-loaded images
-
-        align (bool): enable or disable alignment after detection
-
-        expand_percentage (int): expand detected facial area with a percentage (default is 0).
-
-    Returns:
-        results (List[DetectedFace]): A list of DetectedFace objects
-            where each object contains:
-
-        - img (np.ndarray): The detected face as a NumPy array.
-
-        - facial_area (FacialAreaRegion): The facial area region represented as x, y, w, h,
-            left_eye and right eye. left eye and right eye are eyes on the left and right
-            with respect to the person instead of observer.
-
-        - confidence (float): The confidence score associated with the detected face.
-    """
     face_detector: Detector = modeling.build_model(
         task="face_detector", model_name=detector_backend
     )
 
-    # validate expand percentage score
-    if expand_percentage < 0:
-        logger.warn(
-            f"Expand percentage cannot be negative but you set it to {expand_percentage}."
-            "Overwritten it to 0."
-        )
-        expand_percentage = 0
-
-    # If faces are close to the upper boundary, alignment move them outside
-    # Add a black border around an image to avoid this.
     new_img_batch = []
     for img in img_batch:
-        height, width, _ = img.shape
+        _, height, width = img.shape
         height_border = int(0.5 * height)
         width_border = int(0.5 * width)
         if align:
-            img = cv2.copyMakeBorder(
+            img = F.pad(
                 img,
-                height_border,
-                height_border,
-                width_border,
-                width_border,
-                cv2.BORDER_CONSTANT,
-                value=[0, 0, 0],  # Color of the border (black)
+                (width_border, width_border, height_border, height_border),
+                mode="constant",
+                value=0,
             )
         new_img_batch.append((img, (width_border, height_border)))
 
-    # find facial areas of given image
     facial_areas_batch = face_detector.detect_faces([img for img, _ in new_img_batch])
 
-    # Collect all facial areas
     all_facial_areas = []
+    all_imgs = []
+    all_borders = []
     for facial_areas, (img, (width_border, height_border)) in zip(
         facial_areas_batch, new_img_batch
     ):
         facial_areas = facial_areas["faces"]
-        if max_faces is not None and max_faces < len(facial_areas):
-            facial_areas = nlargest(
-                max_faces,
-                facial_areas,
-                key=lambda facial_area: facial_area.w * facial_area.h,
-            )
-        for facial_area in facial_areas:
-            all_facial_areas.append(
-                (
-                    facial_area,
-                    img,
-                    align,
-                    expand_percentage,
-                    width_border,
-                    height_border,
-                )
-            )
+        all_facial_areas.extend(facial_areas)
+        all_imgs.extend([img] * len(facial_areas))
+        all_borders.extend([(width_border, height_border)] * len(facial_areas))
 
-    start_time = time.time()*1000
-    # Parallel processing of facial areas using the global executor
-    results = list(
-        global_executor.map(lambda p: expand_and_align_face(*p), all_facial_areas)
+    results = expand_and_align_face_batch(
+        all_facial_areas, all_imgs, align, expand_percentage, all_borders
     )
-    logging.info("Time taken in alignment: %s ms", str(time.time()*1000 - start_time))
 
-    # Organize results back into the original structure
     resp_batch = []
     index = 0
-    for facial_areas, (img, _) in zip(facial_areas_batch, new_img_batch):
+    for facial_areas in facial_areas_batch:
         faces = []
         for _ in facial_areas["faces"]:
             faces.append(results[index])
@@ -302,171 +174,184 @@ def detect_faces(
     return resp_batch
 
 
-def expand_and_align_face(
-    facial_area: FacialAreaRegion,
-    img: np.ndarray,
+def expand_and_align_face_batch(
+    facial_areas: List[FacialAreaRegion],
+    imgs: List[torch.Tensor],
     align: bool,
     expand_percentage: int,
-    width_border: int,
-    height_border: int,
-) -> DetectedFace:
-    x = facial_area.x
-    y = facial_area.y
-    w = facial_area.w
-    h = facial_area.h
-    left_eye = facial_area.left_eye
-    right_eye = facial_area.right_eye
-    confidence = facial_area.confidence
+    borders: List[Tuple[int, int]],
+) -> List[DetectedFace]:
+    # batch_size = len(facial_areas)
+    device = imgs[0].device
+
+    # Find max dimensions
+    max_height = max(img.shape[1] for img in imgs)
+    max_width = max(img.shape[2] for img in imgs)
+
+    # save_images(imgs, "original")
+
+    # Pad images to max dimensions
+    padded_imgs = []
+    for img in imgs:
+        _, h, w = img.shape
+        pad_h = max_height - h
+        pad_w = max_width - w
+        padded_img = F.pad(img, (0, pad_w, 0, pad_h), mode="constant", value=0)
+        padded_imgs.append(padded_img)
+
+    # save_images(padded_imgs, "padded")
+    padded_imgs = torch.stack(padded_imgs)
+
+    x = torch.tensor([fa.x for fa in facial_areas], device=device)
+    y = torch.tensor([fa.y for fa in facial_areas], device=device)
+    w = torch.tensor([fa.w for fa in facial_areas], device=device)
+    h = torch.tensor([fa.h for fa in facial_areas], device=device)
+    confidence = torch.tensor([fa.confidence for fa in facial_areas], device=device)
+
+    left_eyes = torch.tensor([fa.left_eye for fa in facial_areas], device=device)
+    right_eyes = torch.tensor([fa.right_eye for fa in facial_areas], device=device)
 
     if expand_percentage > 0:
-        # Expand the facial region height and width by the provided percentage
-        # ensuring that the expanded region stays within img.shape limits
-        expanded_w = w + int(w * expand_percentage / 100)
-        expanded_h = h + int(h * expand_percentage / 100)
+        expanded_w = w + (w * expand_percentage // 100)
+        expanded_h = h + (h * expand_percentage // 100)
 
-        x = max(0, x - int((expanded_w - w) / 2))
-        y = max(0, y - int((expanded_h - h) / 2))
-        w = min(img.shape[1] - x, expanded_w)
-        h = min(img.shape[0] - y, expanded_h)
-
-    # extract detected face unaligned
-    detected_face = img[int(y) : int(y + h), int(x) : int(x + w)]
-
-    # cv2.imwrite(f"face_before_{time.time() * 1000}.jpg", detected_face)
-
-    # align original image, then find projection of detected face area after alignment
-    if align:  # and left_eye is not None and right_eye is not None:
-        aligned_img, angle = align_img_wrt_eyes(
-            img=img, left_eye=left_eye, right_eye=right_eye
+        x = torch.clamp(x - ((expanded_w - w) // 2), min=0)
+        y = torch.clamp(y - ((expanded_h - h) // 2), min=0)
+        w = torch.min(
+            torch.tensor([img.shape[2] for img in imgs], device=device) - x, expanded_w
+        )
+        h = torch.min(
+            torch.tensor([img.shape[1] for img in imgs], device=device) - y, expanded_h
         )
 
-        rotated_x1, rotated_y1, rotated_x2, rotated_y2 = project_facial_area(
-            facial_area=(x, y, x + w, y + h),
-            angle=angle,
-            size=(img.shape[0], img.shape[1]),
+    if align:
+        aligned_imgs, angles = align_img_wrt_eyes_batch(
+            padded_imgs, left_eyes, right_eyes
         )
-        detected_face = aligned_img[
-            int(rotated_y1) : int(rotated_y2), int(rotated_x1) : int(rotated_x2)
+        # save_images(aligned_imgs, "aligned")
+        img_sizes = torch.tensor(
+            [(img.shape[2], img.shape[1]) for img in imgs], device=device
+        )  # Note the order change: width, height
+
+        rotated_coords = project_facial_area_batch(
+            torch.stack([x, y, x + w, y + h], dim=1), angles, img_sizes
+        )
+        detected_faces = [
+            aligned_imgs[i, :, int(y1) : int(y2), int(x1) : int(x2)]
+            for i, (x1, y1, x2, y2) in enumerate(rotated_coords)
         ]
 
-        # restore x, y, le and re before border added
-        x -= width_border
-        y -= height_border
-        # w and h will not change
-        if left_eye is not None:
-            left_eye = (left_eye[0] - width_border, left_eye[1] - height_border)
-        if right_eye is not None:
-            right_eye = (right_eye[0] - width_border, right_eye[1] - height_border)
+        width_borders, height_borders = zip(*borders)
+        x = x - torch.tensor(width_borders, device=device)
+        y = y - torch.tensor(height_borders, device=device)
 
-    # cv2.imwrite(f"face_after_{time.time()*1000}.jpg", detected_face)
+        left_eyes = left_eyes - torch.tensor(borders, device=device)
+        right_eyes = right_eyes - torch.tensor(borders, device=device)
 
-    return DetectedFace(
-        img=detected_face,
-        facial_area=FacialAreaRegion(
-            x=x,
-            y=y,
-            h=h,
-            w=w,
-            confidence=confidence,
-            left_eye=left_eye,
-            right_eye=right_eye,
-        ),
-        confidence=confidence,
+    else:
+        detected_faces = [
+            padded_imgs[i, :, int(y_i) : int(y_i + h_i), int(x_i) : int(x_i + w_i)]
+            for i, (x_i, y_i, w_i, h_i) in enumerate(zip(x, y, w, h))
+        ]
+        # save_images(detected_faces, "detected_before_align")
+
+    return [
+        DetectedFace(
+            img=face,
+            facial_area=FacialAreaRegion(
+                x=int(x_i),
+                y=int(y_i),
+                w=int(w_i),
+                h=int(h_i),
+                confidence=conf_i,
+                left_eye=tuple(le_i.int().tolist()),
+                right_eye=tuple(re_i.int().tolist()),
+            ),
+            confidence=conf_i,
+        )
+        for face, x_i, y_i, w_i, h_i, conf_i, le_i, re_i in zip(
+            detected_faces, x, y, w, h, confidence, left_eyes, right_eyes
+        )
+    ]
+
+
+def align_img_wrt_eyes_batch(
+    imgs: torch.Tensor,
+    left_eyes: torch.Tensor,
+    right_eyes: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    imgs = imgs / 255.0
+
+    # Calculate angles
+    dY = right_eyes[:, 1] - left_eyes[:, 1]
+    dX = right_eyes[:, 0] - left_eyes[:, 0]
+    angles = torch.atan2(dY, dX) * 180 / math.pi
+
+    # Adjust angles to align eyes horizontally
+    angles = torch.where(angles > 90, angles - 180, angles)
+
+    # Calculate centers
+    centers = (left_eyes + right_eyes) / 2
+
+    # Perform rotation using kornia
+    aligned_imgs = kornia.geometry.rotate(imgs, angles, center=centers)
+
+    aligned_imgs = aligned_imgs * 255.0
+    return aligned_imgs, angles
+
+
+def project_facial_area_batch(
+    facial_areas: torch.Tensor, angles: torch.Tensor, sizes: torch.Tensor
+) -> torch.Tensor:
+    device = facial_areas.device
+    batch_size = facial_areas.shape[0]
+
+    # Normalize angles
+    directions = torch.where(
+        angles >= 0, torch.tensor(1.0, device=device), torch.tensor(-1.0, device=device)
     )
+    angles = torch.abs(angles) % 360
 
+    # Early return for zero angles
+    zero_angles = angles == 0
+    if zero_angles.all():
+        return facial_areas
 
-def align_img_wrt_eyes(
-    img: np.ndarray,
-    left_eye: Union[list, tuple],
-    right_eye: Union[list, tuple],
-) -> Tuple[np.ndarray, float]:
-    """
-    Align a given image horizontally with respect to their left and right eye locations
-    Args:
-        img (np.ndarray): pre-loaded image with detected face
-        left_eye (list or tuple): coordinates of left eye with respect to the person itself
-        right_eye(list or tuple): coordinates of right eye with respect to the person itself
-    Returns:
-        img (np.ndarray): aligned facial image
-    """
-    if left_eye is None or right_eye is None or img.shape[0] == 0 or img.shape[1] == 0:
-        return img, 0
+    # Convert to radians
+    angles_rad = angles * math.pi / 180
 
-    angle = float(
-        np.degrees(np.arctan2(left_eye[1] - right_eye[1], left_eye[0] - right_eye[0]))
-    )
+    heights, widths = sizes[:, 0], sizes[:, 1]
 
-    (h, w) = img.shape[:2]
-    center = (w // 2, h // 2)
-    M = cv2.getRotationMatrix2D(center, angle, 1.0)
-    img = cv2.warpAffine(
-        img,
-        M,
-        (w, h),
-        flags=cv2.INTER_CUBIC,
-        borderMode=cv2.BORDER_CONSTANT,
-        borderValue=(0, 0, 0),
-    )
+    # Translate the facial areas to the center of the images
+    x = (facial_areas[:, 0] + facial_areas[:, 2]) / 2 - widths / 2
+    y = (facial_areas[:, 1] + facial_areas[:, 3]) / 2 - heights / 2
 
-    return img, angle
+    # Rotate the facial areas
+    cos_angles = torch.cos(angles_rad)
+    sin_angles = torch.sin(angles_rad)
+    x_new = x * cos_angles + y * directions * sin_angles
+    y_new = -x * directions * sin_angles + y * cos_angles
 
-
-def project_facial_area(
-    facial_area: Tuple[int, int, int, int], angle: float, size: Tuple[int, int]
-) -> Tuple[int, int, int, int]:
-    """
-    Update pre-calculated facial area coordinates after image itself
-        rotated with respect to the eyes.
-    Inspired from the work of @UmutDeniz26 - github.com/serengil/retinaface/pull/80
-
-    Args:
-        facial_area (tuple of int): Representing the (x1, y1, x2, y2) of the facial area.
-            x2 is equal to x1 + w1, and y2 is equal to y1 + h1
-        angle (float): Angle of rotation in degrees. Its sign determines the direction of rotation.
-                       Note that angles > 360 degrees are normalized to the range [0, 360).
-        size (tuple of int): Tuple representing the size of the image (width, height).
-
-    Returns:
-        rotated_coordinates (tuple of int): Representing the new coordinates
-            (x1, y1, x2, y2) or (x1, y1, x1+w1, y1+h1) of the rotated facial area.
-    """
-
-    # Normalize the witdh of the angle so we don't have to
-    # worry about rotations greater than 360 degrees.
-    # We workaround the quirky behavior of the modulo operator
-    # for negative angle values.
-    direction = 1 if angle >= 0 else -1
-    angle = abs(angle) % 360
-    if angle == 0:
-        return facial_area
-
-    # Angle in radians
-    angle = angle * np.pi / 180
-
-    height, width = size
-
-    # Translate the facial area to the center of the image
-    x = (facial_area[0] + facial_area[2]) / 2 - width / 2
-    y = (facial_area[1] + facial_area[3]) / 2 - height / 2
-
-    # Rotate the facial area
-    x_new = x * np.cos(angle) + y * direction * np.sin(angle)
-    y_new = -x * direction * np.sin(angle) + y * np.cos(angle)
-
-    # Translate the facial area back to the original position
-    x_new = x_new + width / 2
-    y_new = y_new + height / 2
+    # Translate the facial areas back to the original positions
+    x_new = x_new + widths / 2
+    y_new = y_new + heights / 2
 
     # Calculate projected coordinates after alignment
-    x1 = x_new - (facial_area[2] - facial_area[0]) / 2
-    y1 = y_new - (facial_area[3] - facial_area[1]) / 2
-    x2 = x_new + (facial_area[2] - facial_area[0]) / 2
-    y2 = y_new + (facial_area[3] - facial_area[1]) / 2
+    widths_half = (facial_areas[:, 2] - facial_areas[:, 0]) / 2
+    heights_half = (facial_areas[:, 3] - facial_areas[:, 1]) / 2
+    x1 = x_new - widths_half
+    y1 = y_new - heights_half
+    x2 = x_new + widths_half
+    y2 = y_new + heights_half
 
-    # validate projected coordinates are in image's boundaries
-    x1 = max(int(x1), 0)
-    y1 = max(int(y1), 0)
-    x2 = min(int(x2), width)
-    y2 = min(int(y2), height)
+    # Validate projected coordinates are in images' boundaries
+    x1 = torch.clamp(x1, min=0)
+    y1 = torch.clamp(y1, min=0)
+    x2 = torch.clamp(x2, max=widths)
+    y2 = torch.clamp(y2, max=heights)
 
-    return (x1, y1, x2, y2)
+    # Combine results
+    result = torch.stack([x1, y1, x2, y2], dim=1)
+    result = torch.where(zero_angles.unsqueeze(1), facial_areas, result)
+
+    return result.int()
