@@ -2,7 +2,6 @@ import torch
 from typing import Any, Dict, List, Optional
 
 from deepface.modules import modeling, detection, preprocessing
-from deepface.models.FacialRecognition import FacialRecognition
 
 
 def represent(
@@ -34,7 +33,7 @@ def represent(
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    model: FacialRecognition = modeling.build_model(
+    model = modeling.build_model(
         task="facial_recognition", model_name=model_name
     )
 
