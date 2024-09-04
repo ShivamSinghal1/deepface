@@ -3,7 +3,7 @@ import torch.nn.functional as F
 import math
 from typing import List, Dict, Any, Tuple
 
-import kornia
+from kornia.geometry import rotate
 
 from deepface.modules import modeling
 from deepface.models.Detector import Detector, DetectedFace, FacialAreaRegion
@@ -294,7 +294,7 @@ def align_img_wrt_eyes_batch(
     centers = (left_eyes + right_eyes) / 2
 
     # Perform rotation using kornia
-    aligned_imgs = kornia.geometry.rotate(imgs, angles, center=centers)
+    aligned_imgs = rotate(imgs, angles, center=centers)
 
     aligned_imgs = aligned_imgs * 255.0
     return aligned_imgs, angles
