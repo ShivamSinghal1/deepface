@@ -85,6 +85,7 @@ def load_facenet512d_onnx_model(
     )
 
     if not os.path.isfile(onnx_model_path):
+        os.makedirs(os.path.dirname(onnx_model_path), exist_ok=True)
         logger.info(f"{os.path.basename(onnx_model_path)} will be downloaded...")
         gdown.download(url, onnx_model_path, quiet=False)
 

@@ -1,7 +1,6 @@
 import torch
 from typing import Any, Dict, List, Optional
 
-# from deepface.commons import image_utils
 from deepface.modules import modeling, detection, preprocessing
 from deepface.models.FacialRecognition import FacialRecognition
 
