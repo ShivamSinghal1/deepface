@@ -27,7 +27,7 @@ def build_model(task: str, model_name: str) -> Any:
             "OpenFace": "deepface.models.facial_recognition.OpenFace.OpenFaceClient",
             "Facenet": "deepface.models.facial_recognition.Facenet.FaceNet128dClient",
             "Facenet512": "deepface.models.facial_recognition.Facenet.FaceNet512dClient",
-            "Facenet512ONNX": "deepface.models.facial_recognition.Facenet.FaceNet512dONNXClient",
+            "Facenet512ONNX": "deepface.models.facial_recognition.FacenetONNX.FaceNet512dONNXClient",
             "DeepFace": "deepface.models.facial_recognition.FbDeepFace.DeepFaceClient",
             "DeepID": "deepface.models.facial_recognition.DeepID.DeepIdClient",
             "Dlib": "deepface.models.facial_recognition.Dlib.DlibClient",
