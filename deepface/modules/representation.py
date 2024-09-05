@@ -32,6 +32,7 @@ def represent(
     Returns:
         List[Dict[str, List[Dict[str, Any]]]]: List of dictionaries containing embeddings and facial areas.
     """
+    _start_time = time.time() * 1000
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model = modeling.build_model(
@@ -103,4 +104,5 @@ def represent(
 
         resp_objs_batch.append({"faces": resp_objs})
 
+    print("Total Time Taken in Represent:", time.time() * 1000 - _start_time)
     return resp_objs_batch
