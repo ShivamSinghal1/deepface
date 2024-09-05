@@ -1,4 +1,5 @@
 import torch
+import time
 from typing import Any, Dict, List, Optional
 
 from deepface.modules import modeling, detection, preprocessing
