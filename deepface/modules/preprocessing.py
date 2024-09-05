@@ -72,7 +72,7 @@ def resize_image(
     if h == target_h and w == target_w:
         return img
 
-    print("Image Device in resize Image:", img.device)
+    # print("Image Device in resize Image:", img.device)
     # Resize
     scale = min(target_h / h, target_w / w)
     new_h, new_w = int(h * scale), int(w * scale)
