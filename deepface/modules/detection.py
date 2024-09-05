@@ -183,6 +183,7 @@ def expand_and_align_face_batch(
 ) -> List[DetectedFace]:
     # batch_size = len(facial_areas)
     device = imgs[0].device
+    print("Device in expand_and_align_face_batch:", device)
 
     # Find max dimensions
     max_height = max(img.shape[1] for img in imgs)

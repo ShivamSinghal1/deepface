@@ -27,6 +27,7 @@ class FastMtCnnClient(Detector):
             List[Dict[str, List[FacialAreaRegion]]]: A list of dictionaries containing FacialAreaRegion objects.
         """
         # self.save_images(img, "original")
+        print("Image Device in detect_faces:", img[0].device)
         max_height = max(
             (
                 image.shape[-2]

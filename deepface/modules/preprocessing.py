@@ -50,22 +50,23 @@ def normalize_input(
 
 
 def resize_image(
-    img: Union[np.ndarray, torch.Tensor], target_size: Tuple[int, int]
+    img: torch.Tensor, target_size: Tuple[int, int]
 ) -> torch.Tensor:
     """
     Resize an image to expected size of a ml model with adding black pixels.
 
     Args:
-        img (Union[np.ndarray, torch.Tensor]): Pre-loaded image as numpy array or torch tensor.
+        img (torch.Tensor): Pre-loaded image as numpy array or torch tensor.
         target_size (tuple): Input shape of ml model.
 
     Returns:
         torch.Tensor: Resized input image.
     """
 
-    if isinstance(img, np.ndarray):
-        img = torch.from_numpy(img).permute(2, 0, 1).float()
+    # if isinstance(img, np.ndarray):
+    #     img = torch.from_numpy(img).permute(2, 0, 1).float()
 
+    print("Image Device in resize Image:", img.device)
     _, h, w = img.shape
     target_h, target_w = target_size
 

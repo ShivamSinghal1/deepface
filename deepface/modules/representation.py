@@ -57,12 +57,14 @@ def represent(
             img = img_obj["face"]  # This is now a tensor
             img = preprocessing.resize_image(img, target_size)
             img = img / 255.0
+            img = img.permute(1, 2, 0)
             batch_images.append(img)
             batch_facial_areas.append(img_obj["facial_area"])
 
     embedding = []
     if batch_images:
-        batch_tensor = torch.stack(batch_images).to(device)
+        batch_tensor = torch.stack(batch_images).cpu().numpy()
+        print("Batch Tensor Shape:", batch_tensor.shape)
         with torch.no_grad():
             embedding = model.forward(batch_tensor)
 

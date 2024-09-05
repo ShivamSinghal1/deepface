@@ -34,18 +34,18 @@ class FaceNet512dONNXClient(FacialRecognition):
         input_name = self.model.get_inputs()[0].name
         output_name = self.model.get_outputs()[0].name
 
-        # Convert PyTorch tensor to numpy array if necessary
-        if isinstance(img, torch.Tensor):
-            img = img.cpu().numpy()
+        # # Convert PyTorch tensor to numpy array if necessary
+        # if isinstance(img, torch.Tensor):
+        #     img = img.cpu().numpy()
 
         # Ensure the input is in the correct format (NHWC for ONNX models)
-        if len(img.shape) == 3:
-            img = np.expand_dims(img, axis=0)
-        elif len(img.shape) == 4:
-            if img.shape[1] == 3:  # NCHW format
-                img = np.transpose(img, (0, 2, 3, 1))  # Convert to NHWC
-        else:
-            raise ValueError(f"Unexpected input shape: {img.shape}")
+        # if len(img.shape) == 3:
+        #     img = np.expand_dims(img, axis=0)
+        # elif len(img.shape) == 4:
+        #     if img.shape[1] == 3:  # NCHW format
+        #         img = np.transpose(img, (0, 2, 3, 1))  # Convert to NHWC
+        # else:
+        #     raise ValueError(f"Unexpected input shape: {img.shape}")
 
         result = self.model.run([output_name], {input_name: img})
         return result[0]
