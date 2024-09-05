@@ -39,6 +39,7 @@ def represent(
 
     target_size = model.input_shape
 
+    start_time = time.time() * 1000
     img_objs_batch = detection.extract_faces(
         img_tensors=img_tensors,
         detector_backend=detector_backend,
@@ -46,6 +47,7 @@ def represent(
         expand_percentage=expand_percentage,
         anti_spoofing=anti_spoofing,
     )
+    print("Extract Faces Time:", time.time() * 1000 - start_time)
 
     resp_objs_batch = []
     batch_images = []
@@ -65,8 +67,10 @@ def represent(
     if batch_images:
         batch_tensor = torch.stack(batch_images).cpu().numpy()
         print("Batch Tensor Shape:", batch_tensor.shape)
+        start_time = time.time() * 1000
         with torch.no_grad():
             embedding = model.forward(batch_tensor)
+        print("Embedding Model Forward Time:", time.time() * 1000 - start_time)
 
         if embedding_normalize:
             embedding = torch.nn.functional.normalize(

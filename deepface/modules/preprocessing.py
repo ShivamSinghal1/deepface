@@ -66,10 +66,13 @@ def resize_image(
     # if isinstance(img, np.ndarray):
     #     img = torch.from_numpy(img).permute(2, 0, 1).float()
 
-    print("Image Device in resize Image:", img.device)
     _, h, w = img.shape
     target_h, target_w = target_size
 
+    if h == target_h and w == target_w:
+        return img
+
+    print("Image Device in resize Image:", img.device)
     # Resize
     scale = min(target_h / h, target_w / w)
     new_h, new_w = int(h * scale), int(w * scale)

@@ -1,3 +1,4 @@
+import time
 import torch
 import torch.nn.functional as F
 import math
@@ -52,12 +53,14 @@ def extract_faces(
         for img in img_tensors
     ]
 
+    start_time = time.time() * 1000
     face_objs_batch = detect_faces(
         detector_backend=detector_backend,
         img_batch=img_tensors,
         align=align,
         expand_percentage=expand_percentage,
     )
+    print("Time taken in detect_faces:", time.time() * 1000 - start_time)
 
     resp_objs_batch = []
     all_faces = []
@@ -106,9 +109,11 @@ def extract_faces(
 
     if anti_spoofing and all_faces:
         antispoof_model = modeling.build_model(task="spoofing", model_name="Fasnet")
+        start_time = time.time() * 1000
         antispoof_results = antispoof_model.analyze(
             imgs=all_faces, facial_areas=all_facial_areas
         )
+        print("Time taken in antispoof_model.analyze:", time.time() * 1000 - start_time)
 
         for (img_index, face_index), (is_real, antispoof_score) in zip(
             all_img_indices, antispoof_results
@@ -145,7 +150,9 @@ def detect_faces(
             )
         new_img_batch.append((img, (width_border, height_border)))
 
+    start_time = time.time() * 1000
     facial_areas_batch = face_detector.detect_faces([img for img, _ in new_img_batch])
+    print("Time taken in detect_faces:", time.time() * 1000 - start_time)
 
     all_facial_areas = []
     all_imgs = []
@@ -158,9 +165,11 @@ def detect_faces(
         all_imgs.extend([img] * len(facial_areas))
         all_borders.extend([(width_border, height_border)] * len(facial_areas))
 
+    start_time = time.time() * 1000
     results = expand_and_align_face_batch(
         all_facial_areas, all_imgs, align, expand_percentage, all_borders
     )
+    print("Time taken in expand_and_align_face_batch:", time.time() * 1000 - start_time)
 
     resp_batch = []
     index = 0
