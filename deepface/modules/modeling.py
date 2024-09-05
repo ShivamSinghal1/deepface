@@ -1,33 +1,6 @@
 # built-in dependencies
 from typing import Any
 
-# project dependencies
-from deepface.models.facial_recognition import (
-    VGGFace,
-    OpenFace,
-    FbDeepFace,
-    DeepID,
-    ArcFace,
-    SFace,
-    Dlib,
-    Facenet,
-    GhostFaceNet,
-)
-from deepface.models.face_detection import (
-    FastMtCnn,
-    MediaPipe,
-    MtCnn,
-    OpenCv,
-    Dlib as DlibDetector,
-    RetinaFace,
-    Ssd,
-    Yolo,
-    YuNet,
-    CenterFace,
-)
-from deepface.models.demography import Age, Gender, Race, Emotion
-from deepface.models.spoofing import FasNet
-
 
 def build_model(task: str, model_name: str) -> Any:
     """
@@ -48,53 +21,56 @@ def build_model(task: str, model_name: str) -> Any:
     # singleton design pattern
     global cached_models
 
-    models = {
+    model_paths = {
         "facial_recognition": {
-            "VGG-Face": VGGFace.VggFaceClient,
-            "OpenFace": OpenFace.OpenFaceClient,
-            "Facenet": Facenet.FaceNet128dClient,
-            "Facenet512": Facenet.FaceNet512dClient,
-            "Facenet512ONNX": Facenet.FaceNet512dONNXClient,
-            "DeepFace": FbDeepFace.DeepFaceClient,
-            "DeepID": DeepID.DeepIdClient,
-            "Dlib": Dlib.DlibClient,
-            "ArcFace": ArcFace.ArcFaceClient,
-            "SFace": SFace.SFaceClient,
-            "GhostFaceNet": GhostFaceNet.GhostFaceNetClient,
+            "VGG-Face": "deepface.models.facial_recognition.VGGFace.VggFaceClient",
+            "OpenFace": "deepface.models.facial_recognition.OpenFace.OpenFaceClient",
+            "Facenet": "deepface.models.facial_recognition.Facenet.FaceNet128dClient",
+            "Facenet512": "deepface.models.facial_recognition.Facenet.FaceNet512dClient",
+            "Facenet512ONNX": "deepface.models.facial_recognition.FacenetONNX.FaceNet512dONNXClient",
+            "DeepFace": "deepface.models.facial_recognition.FbDeepFace.DeepFaceClient",
+            "DeepID": "deepface.models.facial_recognition.DeepID.DeepIdClient",
+            "Dlib": "deepface.models.facial_recognition.Dlib.DlibClient",
+            "ArcFace": "deepface.models.facial_recognition.ArcFace.ArcFaceClient",
+            "SFace": "deepface.models.facial_recognition.SFace.SFaceClient",
+            "GhostFaceNet": "deepface.models.facial_recognition.GhostFaceNet.GhostFaceNetClient",
         },
         "spoofing": {
-            "Fasnet": FasNet.Fasnet,
+            "Fasnet": "deepface.models.spoofing.FasNet.Fasnet",
         },
         "facial_attribute": {
-            "Emotion": Emotion.EmotionClient,
-            "Age": Age.ApparentAgeClient,
-            "Gender": Gender.GenderClient,
-            "Race": Race.RaceClient,
+            "Emotion": "deepface.models.demography.Emotion.EmotionClient",
+            "Age": "deepface.models.demography.Age.ApparentAgeClient",
+            "Gender": "deepface.models.demography.Gender.GenderClient",
+            "Race": "deepface.models.demography.Race.RaceClient",
         },
         "face_detector": {
-            "opencv": OpenCv.OpenCvClient,
-            "mtcnn": MtCnn.MtCnnClient,
-            "ssd": Ssd.SsdClient,
-            "dlib": DlibDetector.DlibClient,
-            "retinaface": RetinaFace.RetinaFaceClient,
-            "mediapipe": MediaPipe.MediaPipeClient,
-            "yolov8": Yolo.YoloClient,
-            "yunet": YuNet.YuNetClient,
-            "fastmtcnn": FastMtCnn.FastMtCnnClient,
-            "centerface": CenterFace.CenterFaceClient,
+            "opencv": "deepface.models.face_detection.OpenCv.OpenCvClient",
+            "mtcnn": "deepface.models.face_detection.MtCnn.MtCnnClient",
+            "ssd": "deepface.models.face_detection.Ssd.SsdClient",
+            "dlib": "deepface.models.face_detection.Dlib.DlibDetector.DlibClient",
+            "retinaface": "deepface.models.face_detection.RetinaFace.RetinaFaceClient",
+            "mediapipe": "deepface.models.face_detection.MediaPipe.MediaPipeClient",
+            "yolov8": "deepface.models.face_detection.Yolo.YoloClient",
+            "yunet": "deepface.models.face_detection.YuNet.YuNetClient",
+            "fastmtcnn": "deepface.models.face_detection.FastMtCnn.FastMtCnnClient",
+            "centerface": "deepface.models.face_detection.CenterFace.CenterFaceClient",
         },
     }
 
-    if models.get(task) is None:
+    if model_paths.get(task) is None:
         raise ValueError(f"unimplemented task - {task}")
 
     if not "cached_models" in globals():
-        cached_models = {current_task: {} for current_task in models.keys()}
+        cached_models = {current_task: {} for current_task in model_paths.keys()}
 
     if cached_models[task].get(model_name) is None:
-        model = models[task].get(model_name)
-        if model:
-            cached_models[task][model_name] = model()
+        model_path = model_paths[task].get(model_name)
+        if model_path:
+            module_path, class_name = model_path.rsplit(".", 1)
+            module = __import__(module_path, fromlist=[class_name])
+            model_class = getattr(module, class_name)
+            cached_models[task][model_name] = model_class()
         else:
             raise ValueError(f"Invalid model_name passed - {task}/{model_name}")
 

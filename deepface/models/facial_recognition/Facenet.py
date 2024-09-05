@@ -1,5 +1,5 @@
 import os
-from typing import List, Any
+from typing import List
 import gdown
 import numpy as np
 from deepface.commons import package_utils, folder_utils
@@ -67,24 +67,6 @@ class FaceNet512dClient(FacialRecognition):
         self.model_name = "FaceNet-512d"
         self.input_shape = (160, 160)
         self.output_shape = 512
-
-
-class FaceNet512dONNXClient(FacialRecognition):
-    """
-    FaceNet-1512d model class
-    """
-
-    def __init__(self):
-        self.model = load_facenet512d_onnx_model()
-        self.model_name = "FaceNet-512d-onnx"
-        self.input_shape = (160, 160)
-        self.output_shape = 512
-
-    def forward(self, img: np.ndarray) -> List[float]:
-        input_name = self.model.get_inputs()[0].name
-        output_name = self.model.get_outputs()[0].name
-        result = self.model.run([output_name], {input_name: img})
-        return result[0]
 
 
 def scaling(x, scale):
@@ -1730,42 +1712,4 @@ def load_facenet512d_model(
 
     # -------------------------
 
-    return model
-
-
-def load_facenet512d_onnx_model(
-    url="https://github.com/ShivamSinghal1/deepface/releases/download/v1/facenet512_fp32.onnx",
-) -> Any:
-    """
-    Download Facenet512d ONNX model weights and load
-    Returns:
-        model (Any)
-    """
-    try:
-        import torch  # https://stackoverflow.com/questions/75267445
-        import onnxruntime as ort
-    except ModuleNotFoundError as e:
-        raise ImportError(
-            "FaceNet512ONNX is an optional model, ensure the library is installed. "
-            "Please install using 'pip install onnxruntime' or "
-            "'pip install onnxruntime-gpu' to use gpu"
-        ) from e
-
-    if torch.cuda.is_available():
-        logger.info("using onnx GPU for inference")
-        providers = [
-            'CUDAExecutionProvider',
-            'CPUExecutionProvider',
-        ]
-    else:
-        providers = ['CPUExecutionProvider']
-
-    home = folder_utils.get_deepface_home()
-    onnx_model_path = os.path.join(home, ".deepface/weights/facenet512_onnx_weights.onnx")
-
-    if not os.path.isfile(onnx_model_path):
-        logger.info(f"{os.path.basename(onnx_model_path)} will be downloaded...")
-        gdown.download(url, onnx_model_path, quiet=False)
-
-    model = ort.InferenceSession(onnx_model_path, providers=providers)
     return model
