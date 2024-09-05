@@ -49,9 +49,7 @@ def normalize_input(
     return img
 
 
-def resize_image(
-    img: torch.Tensor, target_size: Tuple[int, int]
-) -> torch.Tensor:
+def resize_image(img: torch.Tensor, target_size: Tuple[int, int]) -> torch.Tensor:
     """
     Resize an image to expected size of a ml model with adding black pixels.
 

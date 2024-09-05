@@ -1,5 +1,5 @@
 import torch
-import time
+# import time
 from typing import Any, List, Dict, Tuple, Union
 import numpy as np
 from deepface.models.Detector import Detector, FacialAreaRegion
@@ -28,7 +28,7 @@ class FastMtCnnClient(Detector):
             List[Dict[str, List[FacialAreaRegion]]]: A list of dictionaries containing FacialAreaRegion objects.
         """
         # self.save_images(img, "original")
-        print("Image Device in detect_faces:", img[0].device)
+        # print("Image Device in detect_faces:", img[0].device)
         max_height = max(
             (
                 image.shape[-2]
@@ -73,10 +73,10 @@ class FastMtCnnClient(Detector):
         # Convert from [B, C, H, W] to [B, H, W, C] for MTCNN
         batch_tensor = batch_tensor.permute(0, 2, 3, 1)
 
-        start_time = time.time() * 1000
+        # start_time = time.time() * 1000
         with torch.no_grad():
             detections_batch = self.model.detect(batch_tensor, landmarks=True)
-        print("Detection Time:", time.time() * 1000 - start_time)
+        # print("Detection Time:", time.time() * 1000 - start_time)
 
         resp_batch = []
         if detections_batch is not None and len(detections_batch) > 0:
