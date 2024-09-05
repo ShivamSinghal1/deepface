@@ -1,89 +1,235 @@
-from typing import Any, Union, List
-import cv2
+import torch
+# import time
+from typing import Any, List, Dict, Tuple, Union
 import numpy as np
 from deepface.models.Detector import Detector, FacialAreaRegion
-
-# Link -> https://github.com/timesler/facenet-pytorch
-# Examples https://www.kaggle.com/timesler/guide-to-mtcnn-in-facenet-pytorch
+from deepface.modules.preprocessing import resize_image
 
 
 class FastMtCnnClient(Detector):
+    """
+    Fast MTCNN face detector client using PyTorch and CUDA if available.
+    """
+
     def __init__(self):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = self.build_model()
 
-    def detect_faces(self, img: np.ndarray) -> List[FacialAreaRegion]:
+    def detect_faces(
+        self, img: List[Union[np.ndarray, torch.Tensor]]
+    ) -> List[Dict[str, List[FacialAreaRegion]]]:
         """
-        Detect and align face with mtcnn
+        Detect and align faces with MTCNN.
 
         Args:
-            img (np.ndarray): pre-loaded image as numpy array
+            img (List[Union[np.ndarray, torch.Tensor]]): List of pre-loaded images as numpy arrays or torch tensors.
 
         Returns:
-            results (List[FacialAreaRegion]): A list of FacialAreaRegion objects
+            List[Dict[str, List[FacialAreaRegion]]]: A list of dictionaries containing FacialAreaRegion objects.
         """
-        resp = []
+        # self.save_images(img, "original")
+        # print("Image Device in detect_faces:", img[0].device)
+        max_height = max(
+            (
+                image.shape[-2]
+                if isinstance(image, torch.Tensor)
+                else (image.shape[0] if isinstance(image, np.ndarray) else 0)
+            )
+            for image in img
+        )
+        max_width = max(
+            (
+                image.shape[-1]
+                if isinstance(image, torch.Tensor)
+                else (image.shape[1] if isinstance(image, np.ndarray) else 0)
+            )
+            for image in img
+        )
+        common_dim = (max_height, max_width)
 
-        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)  # mtcnn expects RGB but OpenCV read BGR
-        detections = self.model.detect(
-            img_rgb, landmarks=True
-        )  # returns boundingbox, prob, landmark
-        if (
-            detections is not None
-            and len(detections) > 0
-            and not any(detection is None for detection in detections)  # issue 1043
-        ):
-            for regions, confidence, eyes in zip(*detections):
-                x, y, w, h = xyxy_to_xywh(regions)
-                right_eye = eyes[0]
-                left_eye = eyes[1]
+        img_tensors = []
+        original_dims = []
 
-                left_eye = tuple(int(i) for i in left_eye)
-                right_eye = tuple(int(i) for i in right_eye)
-
-                facial_area = FacialAreaRegion(
-                    x=x,
-                    y=y,
-                    w=w,
-                    h=h,
-                    left_eye=left_eye,
-                    right_eye=right_eye,
-                    confidence=confidence,
+        for original_image in img:
+            if isinstance(original_image, np.ndarray):
+                original_dims.append(original_image.shape[:2])
+                image_tensor = (
+                    torch.from_numpy(original_image)
+                    .permute(2, 0, 1)
+                    .float()
+                    .to(self.device)
                 )
-                resp.append(facial_area)
+            elif isinstance(original_image, torch.Tensor):
+                original_dims.append(original_image.shape[1:3])
+                image_tensor = original_image.to(self.device)
+            else:
+                raise TypeError(f"Unsupported image type: {type(original_image)}")
 
-        return resp
+            image_tensor = resize_image(image_tensor, common_dim)
+            img_tensors.append(image_tensor)
+
+        batch_tensor = torch.stack(img_tensors)
+
+        # Convert from [B, C, H, W] to [B, H, W, C] for MTCNN
+        batch_tensor = batch_tensor.permute(0, 2, 3, 1)
+
+        # start_time = time.time() * 1000
+        with torch.no_grad():
+            detections_batch = self.model.detect(batch_tensor, landmarks=True)
+        # print("Detection Time:", time.time() * 1000 - start_time)
+
+        resp_batch = []
+        if detections_batch is not None and len(detections_batch) > 0:
+            for idx, (
+                regions_batch,
+                confidence_batch,
+                eyes_batch,
+                original_dim,
+            ) in enumerate(zip(*detections_batch, original_dims)):
+                resp = []
+                if (
+                    regions_batch is None
+                    or confidence_batch is None
+                    or eyes_batch is None
+                ):
+                    resp_batch.append({"faces": []})
+                    continue
+
+                scale_x = original_dim[1] / common_dim[1]
+                scale_y = original_dim[0] / common_dim[0]
+
+                for regions, confidence, eyes in zip(
+                    regions_batch, confidence_batch, eyes_batch
+                ):
+                    if regions is None or confidence is None or eyes is None:
+                        continue
+
+                    # Convert to list if it's a numpy array
+                    regions = (
+                        regions.tolist() if isinstance(regions, np.ndarray) else regions
+                    )
+                    regions = [
+                        float(r) for r in regions
+                    ]  # Ensure all elements are float
+
+                    x1, y1, x2, y2 = regions
+                    x = x1 * scale_x
+                    y = y1 * scale_y
+                    w = (x2 - x1) * scale_x
+                    h = (y2 - y1) * scale_y
+
+                    eyes = eyes.tolist() if isinstance(eyes, np.ndarray) else eyes
+                    eyes = [[float(coord) for coord in eye] for eye in eyes]
+                    right_eye = tuple(
+                        map(int, [eyes[0][0] * scale_x, eyes[0][1] * scale_y])
+                    )
+                    left_eye = tuple(
+                        map(int, [eyes[1][0] * scale_x, eyes[1][1] * scale_y])
+                    )
+
+                    facial_area = FacialAreaRegion(
+                        x=int(x),
+                        y=int(y),
+                        w=int(w),
+                        h=int(h),
+                        left_eye=left_eye,
+                        right_eye=right_eye,
+                        confidence=float(confidence),
+                    )
+                    resp.append(facial_area)
+
+                resp_batch.append({"faces": resp})
+
+        # images_with_detections = self.draw_detections(img, resp_batch)
+        # Save images with detections
+        # self.save_images(images_with_detections, "face_detected")
+        return resp_batch
+
+    @staticmethod
+    def xyxy_to_xywh(regions: List[float]) -> List[float]:
+        """
+        Convert bounding box from (x1, y1, x2, y2) format to (x, y, w, h) format.
+
+        Args:
+            regions (List[float]): Bounding box in (x1, y1, x2, y2) format.
+
+        Returns:
+            List[float]: Bounding box in (x, y, w, h) format.
+        """
+        x1, y1, x2, y2 = regions
+        return [x1, y1, x2 - x1, y2 - y1]
 
     def build_model(self) -> Any:
         """
-        Build a fast mtcnn face detector model
+        Build a fast MTCNN face detector model.
+
         Returns:
-            model (Any)
+            Any: MTCNN model instance.
         """
-        # this is not a must dependency. do not import it in the global level.
         try:
             from facenet_pytorch import MTCNN as fast_mtcnn
-            import torch
         except ModuleNotFoundError as e:
             raise ImportError(
                 "FastMtcnn is an optional detector, ensure the library is installed. "
                 "Please install using 'pip install facenet-pytorch'"
             ) from e
 
-        device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-        face_detector = fast_mtcnn(device=device)
+        return fast_mtcnn(device=self.device)
 
-        return face_detector
+    def draw_detections(
+        self,
+        img: List[Union[np.ndarray, torch.Tensor]],
+        detections: List[Dict[str, List[FacialAreaRegion]]],
+    ) -> List[np.ndarray]:
+        """
+        Draw bounding boxes and eye markers on the images.
 
+        Args:
+            img (List[Union[np.ndarray, torch.Tensor]]): List of original images.
+            detections (List[Dict[str, List[FacialAreaRegion]]]): Detection results.
 
-def xyxy_to_xywh(regions: Union[list, tuple]) -> tuple:
-    """
-    Convert (x1, y1, x2, y2) format to (x, y, w, h) format.
-    Args:
-        regions (list or tuple): facial area coordinates as x, y, x+w, y+h
-    Returns:
-        regions (tuple): facial area coordinates as x, y, w, h
-    """
-    x, y, x_plus_w, y_plus_h = regions[0], regions[1], regions[2], regions[3]
-    w = x_plus_w - x
-    h = y_plus_h - y
-    return (x, y, w, h)
+        Returns:
+            List[np.ndarray]: List of images with bounding boxes and eye markers drawn.
+        """
+        import cv2
+
+        output_images = []
+
+        for original_image, detection in zip(img, detections):
+            if isinstance(original_image, torch.Tensor):
+                original_image = original_image.permute(1, 2, 0).cpu().numpy()
+            image_with_detections = original_image.copy()
+
+            for face in detection["faces"]:
+                x, y, w, h = face.x, face.y, face.w, face.h
+                left_eye = face.left_eye
+                right_eye = face.right_eye
+
+                # Draw bounding box
+                cv2.rectangle(
+                    image_with_detections, (x, y), (x + w, y + h), (0, 255, 0), 2
+                )
+
+                # Draw eyes
+                cv2.circle(image_with_detections, left_eye, 2, (0, 0, 255), 2)
+                cv2.circle(image_with_detections, right_eye, 2, (0, 0, 255), 2)
+
+            output_images.append(image_with_detections)
+
+        return output_images
+
+    def save_images(self, img: List[Union[np.ndarray, torch.Tensor]], prefix: str):
+        """
+        Save images to disk.
+
+        Args:
+            img (List[Union[np.ndarray, torch.Tensor]]): List of images to save.
+            prefix (str): Prefix for the filenames.
+        """
+        import cv2
+
+        for idx, image in enumerate(img):
+            if isinstance(image, torch.Tensor):
+                image = image.permute(1, 2, 0).cpu().numpy()
+            filename = f"{prefix}_image_{idx}.jpg"
+            cv2.imwrite(filename, image[..., ::-1])  # Convert RGB to BGR for OpenCV

@@ -1,121 +1,92 @@
-# built-in dependencies
-from typing import Tuple
-
-# 3rd party
+import torch
+import torch.nn.functional as F
 import numpy as np
-import cv2
-
-# project dependencies
-from deepface.commons import package_utils
+from typing import Tuple, Union
 
 
-tf_major_version = package_utils.get_tf_major_version()
-if tf_major_version == 1:
-    from keras.preprocessing import image
-elif tf_major_version == 2:
-    from tensorflow.keras.preprocessing import image
-
-
-def normalize_input(img: np.ndarray, normalization: str = "base") -> np.ndarray:
-    """Normalize input image.
+def normalize_input(
+    img: Union[np.ndarray, torch.Tensor], normalization: str = "base"
+) -> Union[np.ndarray, torch.Tensor]:
+    """
+    Normalize input image.
 
     Args:
-        img (numpy array): the input image.
-        normalization (str, optional): the normalization technique. Defaults to "base",
-        for no normalization.
+        img (Union[np.ndarray, torch.Tensor]): The input image.
+        normalization (str, optional): The normalization technique. Defaults to "base".
 
     Returns:
-        numpy array: the normalized image.
+        Union[np.ndarray, torch.Tensor]: The normalized image.
     """
-
-    # issue 131 declares that some normalization techniques improves the accuracy
+    if isinstance(img, np.ndarray):
+        img = torch.from_numpy(img).float()
 
     if normalization == "base":
         return img
 
-    # @trevorgribble and @davedgd contributed this feature
-    # restore input in scale of [0, 255] because it was normalized in scale of
-    # [0, 1] in preprocess_face
-    img *= 255
-
     if normalization == "raw":
-        pass  # return just restored pixels
-
+        img *= 255.0
     elif normalization == "Facenet":
-        mean, std = img.mean(), img.std()
+        mean = img.mean()
+        std = img.std()
         img = (img - mean) / std
-
     elif normalization == "Facenet2018":
-        # simply / 127.5 - 1 (similar to facenet 2018 model preprocessing step as @iamrishab posted)
-        img /= 127.5
-        img -= 1
-
+        img = img * 2 - 1  # Equivalent to: img / 127.5 - 1
     elif normalization == "VGGFace":
-        # mean subtraction based on VGGFace1 training data
-        img[..., 0] -= 93.5940
-        img[..., 1] -= 104.7624
-        img[..., 2] -= 129.1863
-
+        img *= 255.0
+        img[0] -= 93.5940
+        img[1] -= 104.7624
+        img[2] -= 129.1863
     elif normalization == "VGGFace2":
-        # mean subtraction based on VGGFace2 training data
-        img[..., 0] -= 91.4953
-        img[..., 1] -= 103.8827
-        img[..., 2] -= 131.0912
-
+        img *= 255.0
+        img[0] -= 91.4953
+        img[1] -= 103.8827
+        img[2] -= 131.0912
     elif normalization == "ArcFace":
-        # Reference study: The faces are cropped and resized to 112×112,
-        # and each pixel (ranged between [0, 255]) in RGB images is normalised
-        # by subtracting 127.5 then divided by 128.
-        img -= 127.5
-        img /= 128
+        img = (img - 0.5) / 0.5  # Equivalent to: (img - 127.5) / 128
     else:
-        raise ValueError(f"unimplemented normalization type - {normalization}")
+        raise ValueError(f"Unimplemented normalization type - {normalization}")
 
     return img
 
 
-def resize_image(img: np.ndarray, target_size: Tuple[int, int]) -> np.ndarray:
+def resize_image(img: torch.Tensor, target_size: Tuple[int, int]) -> torch.Tensor:
     """
     Resize an image to expected size of a ml model with adding black pixels.
+
     Args:
-        img (np.ndarray): pre-loaded image as numpy array
-        target_size (tuple): input shape of ml model
+        img (torch.Tensor): Pre-loaded image as numpy array or torch tensor.
+        target_size (tuple): Input shape of ml model.
+
     Returns:
-        img (np.ndarray): resized input image
+        torch.Tensor: Resized input image.
     """
-    factor_0 = target_size[0] / img.shape[0]
-    factor_1 = target_size[1] / img.shape[1]
-    factor = min(factor_0, factor_1)
 
-    dsize = (
-        int(img.shape[1] * factor),
-        int(img.shape[0] * factor),
-    )
-    img = cv2.resize(img, dsize)
+    # if isinstance(img, np.ndarray):
+    #     img = torch.from_numpy(img).permute(2, 0, 1).float()
 
-    diff_0 = target_size[0] - img.shape[0]
-    diff_1 = target_size[1] - img.shape[1]
+    _, h, w = img.shape
+    target_h, target_w = target_size
 
-    # Put the base image in the middle of the padded image
-    img = np.pad(
-        img,
-        (
-            (diff_0 // 2, diff_0 - diff_0 // 2),
-            (diff_1 // 2, diff_1 - diff_1 // 2),
-            (0, 0),
-        ),
-        "constant",
-    )
+    if h == target_h and w == target_w:
+        return img
 
-    # double check: if target image is not still the same size with target.
-    if img.shape[0:2] != target_size:
-        img = cv2.resize(img, target_size)
+    # print("Image Device in resize Image:", img.device)
+    # Resize
+    scale = min(target_h / h, target_w / w)
+    new_h, new_w = int(h * scale), int(w * scale)
+    img = F.interpolate(
+        img.unsqueeze(0), size=(new_h, new_w), mode="bilinear", align_corners=False
+    ).squeeze(0)
 
-    # make it 4-dimensional how ML models expect
-    img = image.img_to_array(img)
-    img = np.expand_dims(img, axis=0)
-
-    if img.max() > 1:
-        img = (img.astype(np.float32) / 255.0).astype(np.float32)
+    # Pad
+    pad_h = target_h - new_h
+    pad_w = target_w - new_w
+    padding = (
+        pad_w // 2,
+        pad_w - pad_w // 2,
+        pad_h // 2,
+        pad_h - pad_h // 2,
+    )  # left, right, top, bottom
+    img = F.pad(img, padding, mode="constant", value=0)
 
     return img

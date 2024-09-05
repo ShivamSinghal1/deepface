@@ -102,6 +102,17 @@ def load_image(img: Union[str, np.ndarray]) -> Tuple[np.ndarray, str]:
     # img_obj_rgb = cv2.cvtColor(img_obj_bgr, cv2.COLOR_BGR2RGB)
     return img_obj_bgr, img
 
+def load_image_batch(img_batch: List[Union[str, np.ndarray]]) -> List[Tuple[np.ndarray, str]]:
+    """
+    Load images from path, url, base64 or numpy array.
+    Args:
+        img_batch: a list of paths, urls, base64 or numpy arrays.
+    Returns:
+        images (list): list of loaded images in BGR format
+    """
+
+    return [load_image(img) for img in img_batch]
+
 
 def load_image_from_base64(uri: str) -> np.ndarray:
     """

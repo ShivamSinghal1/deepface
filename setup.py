@@ -11,18 +11,18 @@ with open("package_info.json", "r", encoding="utf-8") as f:
     package_info = json.load(f)
 
 setuptools.setup(
-    name="deepface",
+    name="deepface-batching",
     version=package_info["version"],
-    author="Sefik Ilkin Serengil",
-    author_email="serengil@gmail.com",
+    author="Shivam Singhal",
+    author_email="shivamsinghal1012@gmail.com",
     description=(
         "A Lightweight Face Recognition and Facial Attribute Analysis Framework"
-        " (Age, Gender, Emotion, Race) for Python"
+        " (Age, Gender, Emotion, Race) for Python original - https://github.com/serengil/deepface"
     ),
     data_files=[("", ["README.md", "requirements.txt", "package_info.json"])],
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/serengil/deepface",
+    url="https://github.com/ShivamSinghal1/deepface",
     packages=setuptools.find_packages(),
     classifiers=[
         "Programming Language :: Python :: 3",

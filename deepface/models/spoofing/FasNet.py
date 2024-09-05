@@ -1,27 +1,110 @@
-# Minivision's Silent-Face-Anti-Spoofing Repo licensed under Apache License 2.0
-# Ref: github.com/minivision-ai/Silent-Face-Anti-Spoofing/blob/master/src/model_lib/MiniFASNet.py
+from typing import Union, List, Tuple
 
-# built-in dependencies
-from typing import Union
-
-# 3rd party dependencies
-import cv2
 import numpy as np
+import torch
+import torch.nn.functional as F
 
-# project dependencies
 from deepface.commons import folder_utils, file_utils
-from deepface.commons.logger import Logger
 
-logger = Logger()
 
-# pylint: disable=line-too-long, too-few-public-methods
+class CropImage:
+    @staticmethod
+    def _get_new_box(src_w, src_h, bbox, scale):
+        x, y, box_w, box_h = bbox
+        scale = min((src_h - 1) / box_h, min((src_w - 1) / box_w, scale))
+
+        # Ensure square aspect ratio
+        new_size = max(box_w, box_h) * scale
+
+        center_x, center_y = x + box_w / 2, y + box_h / 2
+
+        left_top_x = center_x - new_size / 2
+        left_top_y = center_y - new_size / 2
+        right_bottom_x = center_x + new_size / 2
+        right_bottom_y = center_y + new_size / 2
+
+        # Adjust coordinates if they go outside the image
+        if left_top_x < 0:
+            right_bottom_x -= left_top_x
+            left_top_x = 0
+        if left_top_y < 0:
+            right_bottom_y -= left_top_y
+            left_top_y = 0
+        if right_bottom_x > src_w - 1:
+            left_top_x -= right_bottom_x - src_w + 1
+            right_bottom_x = src_w - 1
+        if right_bottom_y > src_h - 1:
+            left_top_y -= right_bottom_y - src_h + 1
+            right_bottom_y = src_h - 1
+
+        return (
+            int(left_top_x),
+            int(left_top_y),
+            int(right_bottom_x),
+            int(right_bottom_y),
+        )
+
+    def crop(
+        self,
+        org_img: torch.Tensor,
+        bbox,
+        scale,
+        out_w,
+        out_h,
+        crop=True,
+        return_box=False,
+    ):
+        if not crop:
+            dst_img = F.interpolate(
+                org_img.unsqueeze(0),
+                size=(out_h, out_w),
+                mode="bilinear",
+                align_corners=False,
+            ).squeeze(0)
+            return (dst_img, bbox) if return_box else dst_img
+        else:
+            _, src_h, src_w = org_img.shape
+            left_top_x, left_top_y, right_bottom_x, right_bottom_y = self._get_new_box(
+                src_w, src_h, bbox, scale
+            )
+
+            # Ensure coordinates are within image boundaries
+            left_top_x = max(0, left_top_x)
+            left_top_y = max(0, left_top_y)
+            right_bottom_x = min(src_w, right_bottom_x)
+            right_bottom_y = min(src_h, right_bottom_y)
+
+            img = org_img[:, left_top_y:right_bottom_y, left_top_x:right_bottom_x]
+
+            # If the crop results in an empty image, use the entire original image
+            if img.numel() == 0:
+                img = org_img
+                left_top_x, left_top_y, right_bottom_x, right_bottom_y = (
+                    0,
+                    0,
+                    src_w,
+                    src_h,
+                )
+
+            dst_img = F.interpolate(
+                img.unsqueeze(0),
+                size=(out_h, out_w),
+                mode="bilinear",
+                align_corners=False,
+            ).squeeze(0)
+
+            if return_box:
+                return dst_img, (left_top_x, left_top_y, right_bottom_x, right_bottom_y)
+            else:
+                return dst_img
+
+
 class Fasnet:
     """
-    Mini Face Anti Spoofing Net Library from repo: github.com/minivision-ai/Silent-Face-Anti-Spoofing
+    Mini Face Anti Spoofing Net Library.
     """
 
     def __init__(self):
-        # pytorch is an opitonal dependency, enforce it to be installed if class imported
         try:
             import torch
         except Exception as err:
@@ -30,10 +113,10 @@ class Fasnet:
             ) from err
 
         home = folder_utils.get_deepface_home()
-        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        self.device = device
+        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.crop_image = CropImage()
 
-        # download pre-trained models if not installed yet
+        # Download pre-trained models if not installed yet
         file_utils.download_external_file(
             file_name="2.7_80x80_MiniFASNetV2.pth",
             exact_file_path=f"{home}/.deepface/weights/2.7_80x80_MiniFASNetV2.pth",
@@ -46,178 +129,84 @@ class Fasnet:
             url="https://github.com/minivision-ai/Silent-Face-Anti-Spoofing/raw/master/resources/anti_spoof_models/4_0_0_80x80_MiniFASNetV1SE.pth",
         )
 
-        # guarantees Fasnet imported and torch installed
         from deepface.models.spoofing import FasNetBackbone
 
-        # Fasnet will use 2 distinct models to predict, then it will find the sum of predictions
-        # to make a final prediction
-
-        first_model = FasNetBackbone.MiniFASNetV2(conv6_kernel=(5, 5)).to(device)
-        second_model = FasNetBackbone.MiniFASNetV1SE(conv6_kernel=(5, 5)).to(device)
-
-        # load model weight for first model
-        state_dict = torch.load(
-            f"{home}/.deepface/weights/2.7_80x80_MiniFASNetV2.pth", map_location=device
+        self.first_model = FasNetBackbone.MiniFASNetV2(conv6_kernel=(5, 5)).to(
+            self.device
         )
-        keys = iter(state_dict)
-        first_layer_name = keys.__next__()
+        self.second_model = FasNetBackbone.MiniFASNetV1SE(conv6_kernel=(5, 5)).to(
+            self.device
+        )
 
-        if first_layer_name.find("module.") >= 0:
+        self.load_model(
+            self.first_model, f"{home}/.deepface/weights/2.7_80x80_MiniFASNetV2.pth"
+        )
+        self.load_model(
+            self.second_model,
+            f"{home}/.deepface/weights/4_0_0_80x80_MiniFASNetV1SE.pth",
+        )
+
+        self.first_model.eval()
+        self.second_model.eval()
+
+    def load_model(self, model, path):
+        state_dict = torch.load(path, map_location=self.device)
+        if next(iter(state_dict)).find("module.") >= 0:
             from collections import OrderedDict
 
-            new_state_dict = OrderedDict()
-            for key, value in state_dict.items():
-                name_key = key[7:]
-                new_state_dict[name_key] = value
-            first_model.load_state_dict(new_state_dict)
+            new_state_dict = OrderedDict((k[7:], v) for k, v in state_dict.items())
+            model.load_state_dict(new_state_dict)
         else:
-            first_model.load_state_dict(state_dict)
+            model.load_state_dict(state_dict)
 
-        # load model weight for second model
-        state_dict = torch.load(
-            f"{home}/.deepface/weights/4_0_0_80x80_MiniFASNetV1SE.pth", map_location=device
-        )
-        keys = iter(state_dict)
-        first_layer_name = keys.__next__()
-
-        if first_layer_name.find("module.") >= 0:
-            from collections import OrderedDict
-
-            new_state_dict = OrderedDict()
-            for key, value in state_dict.items():
-                name_key = key[7:]
-                new_state_dict[name_key] = value
-            second_model.load_state_dict(new_state_dict)
-        else:
-            second_model.load_state_dict(state_dict)
-
-        # evaluate models
-        _ = first_model.eval()
-        _ = second_model.eval()
-
-        self.first_model = first_model
-        self.second_model = second_model
-
-    def analyze(self, img: np.ndarray, facial_area: Union[list, tuple]):
+    def analyze(
+        self, imgs: List[torch.Tensor], facial_areas: List[Union[list, tuple]]
+    ) -> List[Tuple[bool, float]]:
         """
-        Analyze a given image spoofed or not
+        Analyze a batch of images to determine if they are spoofed or not.
+
         Args:
-            img (np.ndarray): pre loaded image
-            facial_area (list or tuple): facial rectangle area coordinates with x, y, w, h respectively
+            imgs (List[torch.Tensor]): List of pre-loaded images as tensors.
+            facial_areas (List[list or tuple]): List of facial rectangle area coordinates with x, y, w, h respectively.
+
         Returns:
-            result (tuple): a result tuple consisting of is_real and score
+            List[Tuple[bool, float]]: A list of result tuples consisting of is_real and score for each image.
         """
-        import torch
-        import torch.nn.functional as F
+        assert len(imgs) == len(
+            facial_areas
+        ), "The number of images must match the number of facial areas."
 
-        x, y, w, h = facial_area
-        first_img = crop(img, (x, y, w, h), 2.7, 80, 80)
-        second_img = crop(img, (x, y, w, h), 4, 80, 80)
+        first_imgs = []
+        second_imgs = []
 
-        test_transform = Compose(
-            [
-                ToTensor(),
-            ]
-        )
+        for idx, (img, facial_area) in enumerate(zip(imgs, facial_areas)):
+            x, y, w, h = facial_area
 
-        first_img = test_transform(first_img)
-        first_img = first_img.unsqueeze(0).to(self.device)
+            # Crop and draw bounding boxes for first and second images
+            first_img, first_box = self.crop_image.crop(
+                img, (x, y, w, h), 2.7, 80, 80, return_box=True
+            )
+            second_img, second_box = self.crop_image.crop(
+                img, (x, y, w, h), 4, 80, 80, return_box=True
+            )
 
-        second_img = test_transform(second_img)
-        second_img = second_img.unsqueeze(0).to(self.device)
+            first_imgs.append(first_img)
+            second_imgs.append(second_img)
+
+        first_imgs = torch.stack(first_imgs).to(self.device)
+        second_imgs = torch.stack(second_imgs).to(self.device)
 
         with torch.no_grad():
-            first_result = self.first_model.forward(first_img)
-            first_result = F.softmax(first_result).cpu().numpy()
+            first_results = F.softmax(self.first_model(first_imgs), dim=1)
+            second_results = F.softmax(self.second_model(second_imgs), dim=1)
 
-            second_result = self.second_model.forward(second_img)
-            second_result = F.softmax(second_result).cpu().numpy()
+        predictions = (first_results + second_results).cpu().numpy()
 
-        prediction = np.zeros((1, 3))
-        prediction += first_result
-        prediction += second_result
+        results = []
+        for prediction in predictions:
+            label = int(np.argmax(prediction))
+            is_real = bool(label == 1)
+            score = float(prediction[label] / 2)
+            results.append((is_real, score))
 
-        label = np.argmax(prediction)
-        is_real = True if label == 1 else False  # pylint: disable=simplifiable-if-expression
-        score = prediction[0][label] / 2
-
-        return is_real, score
-
-
-# subsdiary classes and functions
-
-
-def to_tensor(pic):
-    """Convert a ``numpy.ndarray`` to tensor.
-
-    See ``ToTensor`` for more details.
-
-    Args:
-        pic (PIL Image or numpy.ndarray): Image to be converted to tensor.
-
-    Returns:
-        Tensor: Converted image.
-    """
-    import torch
-
-    # handle numpy array
-    # IR image channel=1: modify by lzc --> 20190730
-    if pic.ndim == 2:
-        pic = pic.reshape((pic.shape[0], pic.shape[1], 1))
-
-    img = torch.from_numpy(pic.transpose((2, 0, 1)))
-    # backward compatibility
-    # return img.float().div(255)  modify by zkx
-    return img.float()
-
-
-class Compose:
-    def __init__(self, transforms):
-        self.transforms = transforms
-
-    def __call__(self, img):
-        for t in self.transforms:
-            img = t(img)
-        return img
-
-
-class ToTensor:
-    def __call__(self, pic):
-        return to_tensor(pic)
-
-
-def _get_new_box(src_w, src_h, bbox, scale):
-    x = bbox[0]
-    y = bbox[1]
-    box_w = bbox[2]
-    box_h = bbox[3]
-    # pylint: disable=nested-min-max
-    scale = min((src_h - 1) / box_h, min((src_w - 1) / box_w, scale))
-    new_width = box_w * scale
-    new_height = box_h * scale
-    center_x, center_y = box_w / 2 + x, box_h / 2 + y
-    left_top_x = center_x - new_width / 2
-    left_top_y = center_y - new_height / 2
-    right_bottom_x = center_x + new_width / 2
-    right_bottom_y = center_y + new_height / 2
-    if left_top_x < 0:
-        right_bottom_x -= left_top_x
-        left_top_x = 0
-    if left_top_y < 0:
-        right_bottom_y -= left_top_y
-        left_top_y = 0
-    if right_bottom_x > src_w - 1:
-        left_top_x -= right_bottom_x - src_w + 1
-        right_bottom_x = src_w - 1
-    if right_bottom_y > src_h - 1:
-        left_top_y -= right_bottom_y - src_h + 1
-        right_bottom_y = src_h - 1
-    return int(left_top_x), int(left_top_y), int(right_bottom_x), int(right_bottom_y)
-
-
-def crop(org_img, bbox, scale, out_w, out_h):
-    src_h, src_w, _ = np.shape(org_img)
-    left_top_x, left_top_y, right_bottom_x, right_bottom_y = _get_new_box(src_w, src_h, bbox, scale)
-    img = org_img[left_top_y : right_bottom_y + 1, left_top_x : right_bottom_x + 1]
-    dst_img = cv2.resize(img, (out_w, out_h))
-    return dst_img
+        return results
