@@ -1,4 +1,5 @@
 import torch
+import time
 from typing import Any, List, Dict, Tuple, Union
 import numpy as np
 from deepface.models.Detector import Detector, FacialAreaRegion
@@ -72,8 +73,10 @@ class FastMtCnnClient(Detector):
         # Convert from [B, C, H, W] to [B, H, W, C] for MTCNN
         batch_tensor = batch_tensor.permute(0, 2, 3, 1)
 
+        start_time = time.time() * 1000
         with torch.no_grad():
             detections_batch = self.model.detect(batch_tensor, landmarks=True)
+        print("Detection Time:", time.time() * 1000 - start_time)
 
         resp_batch = []
         if detections_batch is not None and len(detections_batch) > 0:
