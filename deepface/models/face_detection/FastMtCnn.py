@@ -1,6 +1,6 @@
-import torch
-# import time
+import time
 from typing import Any, List, Dict, Tuple, Union
+import torch
 import numpy as np
 from deepface.models.Detector import Detector, FacialAreaRegion
 from deepface.modules.preprocessing import resize_image
@@ -120,6 +120,7 @@ class FastMtCnnClient(Detector):
 
                     eyes = eyes.tolist() if isinstance(eyes, np.ndarray) else eyes
                     eyes = [[float(coord) for coord in eye] for eye in eyes]
+
                     right_eye = tuple(
                         map(int, [eyes[0][0] * scale_x, eyes[0][1] * scale_y])
                     )
@@ -174,7 +175,7 @@ class FastMtCnnClient(Detector):
                 "Please install using 'pip install facenet-pytorch'"
             ) from e
 
-        return fast_mtcnn(device=self.device)
+        return fast_mtcnn(device=self.device, keep_all=True)
 
     def draw_detections(
         self,
@@ -211,7 +212,7 @@ class FastMtCnnClient(Detector):
                 )
 
                 # Draw eyes
-                cv2.circle(image_with_detections, left_eye, 2, (0, 0, 255), 2)
+                cv2.circle(image_with_detections, left_eye, 2, (255, 0, 0), 2)
                 cv2.circle(image_with_detections, right_eye, 2, (0, 0, 255), 2)
 
             output_images.append(image_with_detections)

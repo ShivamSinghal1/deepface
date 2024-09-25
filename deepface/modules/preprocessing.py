@@ -54,39 +54,44 @@ def resize_image(img: torch.Tensor, target_size: Tuple[int, int]) -> torch.Tenso
     Resize an image to expected size of a ml model with adding black pixels.
 
     Args:
-        img (torch.Tensor): Pre-loaded image as numpy array or torch tensor.
-        target_size (tuple): Input shape of ml model.
+        img (torch.Tensor): Pre-loaded image tensor with shape (C, H, W).
+        target_size (tuple): Input shape of ml model (width, height).
 
     Returns:
         torch.Tensor: Resized input image.
     """
-
-    # if isinstance(img, np.ndarray):
-    #     img = torch.from_numpy(img).permute(2, 0, 1).float()
-
     _, h, w = img.shape
     target_h, target_w = target_size
 
     if h == target_h and w == target_w:
         return img
 
-    # print("Image Device in resize Image:", img.device)
-    # Resize
+    # Resize while maintaining aspect ratio
     scale = min(target_h / h, target_w / w)
     new_h, new_w = int(h * scale), int(w * scale)
-    img = F.interpolate(
+    img_resized = F.interpolate(
         img.unsqueeze(0), size=(new_h, new_w), mode="bilinear", align_corners=False
     ).squeeze(0)
 
-    # Pad
+    # Pad the image to the target size
     pad_h = target_h - new_h
     pad_w = target_w - new_w
     padding = (
-        pad_w // 2,
-        pad_w - pad_w // 2,
-        pad_h // 2,
-        pad_h - pad_h // 2,
-    )  # left, right, top, bottom
-    img = F.pad(img, padding, mode="constant", value=0)
+        pad_w // 2,  # left
+        pad_w - pad_w // 2,  # right
+        pad_h // 2,  # top
+        pad_h - pad_h // 2,  # bottom
+    )
+    img_padded = F.pad(img_resized, padding, mode="constant", value=0)
 
-    return img
+    # Final size verification
+    final_c, final_h, final_w = img_padded.shape
+    if final_h != target_h or final_w != target_w:
+        img_padded = F.interpolate(
+            img_padded.unsqueeze(0),
+            size=(target_h, target_w),
+            mode="bilinear",
+            align_corners=False,
+        ).squeeze(0)
+
+    return img_padded
