@@ -228,9 +228,12 @@ def expand_and_align_face_batch(
     borders: List[Tuple[int, int]],
     original_sizes: List[Tuple[int, int]],
 ) -> List[DetectedFace]:
-    device = imgs[0].device
-
     detected_faces = []
+
+    if len(imgs) == 0:
+        return detected_faces
+
+    device = imgs[0].device
 
     for i, (fa, img, border, original_size) in enumerate(
         zip(facial_areas, imgs, borders, original_sizes)
