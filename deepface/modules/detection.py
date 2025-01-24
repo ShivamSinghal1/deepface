@@ -354,46 +354,42 @@ def project_facial_area(
 ) -> torch.Tensor:
     device = facial_area.device
 
+    # 1) Match original 'direction' logic and ensure angle is in [0, 360)
+    direction = 1 if angle >= 0 else -1
+    angle = torch.abs(angle) % 360
+
     # Convert angle to radians
-    angle_rad = angle * math.pi / 180
+    angle_rad = angle * math.pi / 180.0
 
-    # Rotation matrix
-    cos_theta = torch.cos(angle_rad)
-    sin_theta = torch.sin(angle_rad)
-    rotation_matrix = torch.tensor(
-        [[cos_theta, -sin_theta], [sin_theta, cos_theta]], device=device
-    )
-
-    # Center of the facial area
-    facial_center = torch.stack(
-        [
-            (facial_area[0] + facial_area[2]) / 2,
-            (facial_area[1] + facial_area[3]) / 2,
-        ]
-    )
-
-    # Translate center to origin
-    translated_center = facial_center - center
-
-    # Rotate the center
-    rotated_center = torch.matmul(rotation_matrix, translated_center)
-
-    # Translate back
-    rotated_center += center
-
-    # Width and height of the facial area
-    width_half = (facial_area[2] - facial_area[0]) / 2
-    height_half = (facial_area[3] - facial_area[1]) / 2
-
-    # Calculate new coordinates
-    x1 = rotated_center[0] - width_half
-    y1 = rotated_center[1] - height_half
-    x2 = rotated_center[0] + width_half
-    y2 = rotated_center[1] + height_half
-
-    # Clamp coordinates to image boundaries
+    # size = [img_width, img_height] (be sure this matches how you constructed 'size')
     img_width, img_height = size[0], size[1]
 
+    # Center the facial area around (0,0):
+    #   x, y is the midpoint of the face box minus image center
+    x = ((facial_area[0] + facial_area[2]) / 2.0) - (img_width / 2.0)
+    y = ((facial_area[1] + facial_area[3]) / 2.0) - (img_height / 2.0)
+
+    # 2) Rotate that center by the angle, using direction on the sin term
+    cos_theta = torch.cos(angle_rad)
+    sin_theta = torch.sin(angle_rad)
+
+    x_new = x * cos_theta + y * (direction * sin_theta)
+    y_new = -x * (direction * sin_theta) + y * cos_theta
+
+    # Shift the center back
+    x_new += img_width / 2.0
+    y_new += img_height / 2.0
+
+    # Reconstruct top-left and bottom-right from the new center
+    box_w = facial_area[2] - facial_area[0]
+    box_h = facial_area[3] - facial_area[1]
+
+    x1 = x_new - (box_w / 2.0)
+    y1 = y_new - (box_h / 2.0)
+    x2 = x_new + (box_w / 2.0)
+    y2 = y_new + (box_h / 2.0)
+
+    # Clamp to image boundaries
     x1 = torch.clamp(x1, min=0, max=img_width)
     y1 = torch.clamp(y1, min=0, max=img_height)
     x2 = torch.clamp(x2, min=0, max=img_width)
